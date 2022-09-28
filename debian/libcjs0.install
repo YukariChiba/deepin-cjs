@@ -1,0 +1,3 @@
+usr/lib/*/cjs/girepository-1.0/*.typelib
+usr/lib/*/libcjs*.so.0
+usr/lib/*/libcjs*.so.0.*

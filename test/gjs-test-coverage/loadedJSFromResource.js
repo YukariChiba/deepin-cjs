@@ -1,0 +1,2 @@
+/* exported mockFunction */
+function mockFunction() {}

@@ -1,0 +1,5 @@
+usr/include
+usr/lib/*/libcjs*.so
+usr/lib/*/pkgconfig/
+usr/share/cjs-1.0/lsan/lsan.supp
+usr/share/cjs-1.0/valgrind/gjs.supp
