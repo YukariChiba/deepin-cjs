@@ -1,26 +1,7 @@
 /* -*- mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
-/*
- * Copyright (c) 2008  litl, LLC
- *               2012 Giovanni Campagna <scampa.giovanni@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to
- * deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
- */
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008 litl, LLC
+// SPDX-FileCopyrightText: 2012 Giovanni Campagna <scampa.giovanni@gmail.com>
 
 #include <config.h>
 
@@ -28,16 +9,17 @@
 
 #include <glib.h>
 
+#include <js/CallAndConstruct.h>
 #include <js/CallArgs.h>  // for JSNative
 #include <js/Class.h>
 #include <js/ComparisonOperators.h>
-#include <js/PropertyDescriptor.h>  // for JSPROP_GETTER
+#include <js/Object.h>              // for GetClass
+#include <js/PropertyAndElement.h>  // for JS_DefineFunctions, JS_DefinePro...
 #include <js/Realm.h>  // for GetRealmObjectPrototype
 #include <js/RootingAPI.h>
 #include <js/TypeDecls.h>
 #include <js/Value.h>
-#include <js/ValueArray.h>
-#include <jsapi.h>        // for JS_DefineFunctions, JS_DefineProp...
+#include <jsapi.h>        // for JS_GetFunctionObject, JS_GetPrototype
 #include <jsfriendapi.h>  // for GetFunctionNativeReserved, NewFun...
 #include <jspubtd.h>      // for JSProto_TypeError
 
@@ -48,6 +30,9 @@
 
 struct JSFunctionSpec;
 struct JSPropertySpec;
+namespace JS {
+class HandleValueArray;
+}
 
 /* Reserved slots of JSNative accessor wrappers */
 enum {
@@ -70,10 +55,10 @@ bool gjs_init_class_dynamic(JSContext* context, JS::HandleObject in_object,
        use JS_InitClass for static classes like Math */
     g_assert (constructor_native != NULL);
 
-    /* Class initalization consists of five parts:
+    /* Class initialization consists of five parts:
        - building a prototype
        - defining prototype properties and functions
-       - building a constructor and definining it on the right object
+       - building a constructor and defining it on the right object
        - defining constructor properties and functions
        - linking the constructor and the prototype, so that
          JS_NewObjectForConstructor can find it
@@ -134,7 +119,7 @@ gjs_typecheck_instance(JSContext       *context,
 {
     if (!JS_InstanceOf(context, obj, static_clasp, NULL)) {
         if (throw_error) {
-            const JSClass *obj_class = JS_GetClass(obj);
+            const JSClass* obj_class = JS::GetClass(obj);
 
             gjs_throw_custom(context, JSProto_TypeError, nullptr,
                              "Object %p is not a subclass of %s, it's a %s",
@@ -160,7 +145,12 @@ gjs_construct_object_dynamic(JSContext                  *context,
                                      atoms.constructor(), &constructor))
         return NULL;
 
-    return JS_New(context, constructor, args);
+    JS::RootedValue v_constructor(context, JS::ObjectValue(*constructor));
+    JS::RootedObject object(context);
+    if (!JS::Construct(context, v_constructor, args, &object))
+        return nullptr;
+
+    return object;
 }
 
 GJS_JSAPI_RETURN_CONVENTION
@@ -226,8 +216,6 @@ gjs_define_property_dynamic(JSContext       *cx,
         define_native_accessor_wrapper(cx, setter, 1, setter_name, private_slot));
     if (!setter_obj)
         return false;
-
-    flags |= JSPROP_GETTER | JSPROP_SETTER;
 
     return JS_DefineProperty(cx, proto, prop_name, getter_obj, setter_obj,
                              flags);

@@ -1,25 +1,6 @@
 /* -*- mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
-/*
- * Copyright (c) 2008  litl, LLC
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to
- * deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
- */
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008 litl, LLC
 
 #include <config.h>
 
@@ -27,13 +8,16 @@
 #include <glib-object.h>
 #include <glib.h>
 
+#include <js/PropertyAndElement.h>
 #include <js/RootingAPI.h>
 #include <js/TypeDecls.h>
-#include <jsapi.h>  // for JS_DefineProperty, JS_NewPlainObject
+#include <jsapi.h>  // for JS_NewPlainObject
 
+#include "gi/cwrapper.h"
 #include "gi/enumeration.h"
 #include "gi/wrapperutils.h"
 #include "cjs/jsapi-util.h"
+#include "cjs/macros.h"
 #include "util/log.h"
 
 GJS_JSAPI_RETURN_CONVENTION
@@ -42,8 +26,7 @@ gjs_define_enum_value(JSContext       *context,
                       JS::HandleObject in_object,
                       GIValueInfo     *info)
 {
-    const char *value_name;
-    char *fixed_name;
+    const char* value_name;
     gsize i;
     gint64 value_val;
 
@@ -54,7 +37,7 @@ gjs_define_enum_value(JSContext       *context,
      * Gdk.GravityType.south-west (where 'south-west' is value_name)
      * Convert back to all SOUTH_WEST.
      */
-    fixed_name = g_ascii_strup(value_name, -1);
+    GjsAutoChar fixed_name = g_ascii_strup(value_name, -1);
     for (i = 0; fixed_name[i]; ++i) {
         char c = fixed_name[i];
         if (!(('A' <= c && c <= 'Z') ||
@@ -64,17 +47,17 @@ gjs_define_enum_value(JSContext       *context,
 
     gjs_debug(GJS_DEBUG_GENUM,
               "Defining enum value %s (fixed from %s) %" G_GINT64_MODIFIER "d",
-              fixed_name, value_name, value_val);
+              fixed_name.get(), value_name, value_val);
 
     if (!JS_DefineProperty(context, in_object,
                            fixed_name, (double) value_val,
                            GJS_MODULE_PROP_FLAGS)) {
-        gjs_throw(context, "Unable to define enumeration value %s %" G_GINT64_FORMAT " (no memory most likely)",
-                  fixed_name, value_val);
-        g_free(fixed_name);
+        gjs_throw(context,
+                  "Unable to define enumeration value %s %" G_GINT64_FORMAT
+                  " (no memory most likely)",
+                  fixed_name.get(), value_val);
         return false;
     }
-    g_free(fixed_name);
 
     return true;
 }
@@ -91,16 +74,10 @@ gjs_define_enum_values(JSContext       *context,
      */
     n_values = g_enum_info_get_n_values(info);
     for (i = 0; i < n_values; ++i) {
-        GIValueInfo *value_info = g_enum_info_get_value(info, i);
-        bool failed;
+        GjsAutoBaseInfo value_info = g_enum_info_get_value(info, i);
 
-        failed = !gjs_define_enum_value(context, in_object, value_info);
-
-        g_base_info_unref( (GIBaseInfo*) value_info);
-
-        if (failed) {
+        if (!gjs_define_enum_value(context, in_object, value_info))
             return false;
-        }
     }
     return true;
 }

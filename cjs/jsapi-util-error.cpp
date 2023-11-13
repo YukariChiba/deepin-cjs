@@ -1,25 +1,6 @@
 /* -*- mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
-/*
- * Copyright (c) 2008  litl, LLC
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to
- * deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
- */
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008 litl, LLC
 
 #include <config.h>
 
@@ -27,20 +8,71 @@
 
 #include <glib.h>
 
+#include <js/AllocPolicy.h>
+#include <js/CallAndConstruct.h>
 #include <js/CharacterEncoding.h>
 #include <js/ErrorReport.h>
+#include <js/Exception.h>
+#include <js/GCHashTable.h>  // for GCHashSet
+#include <js/HashTable.h>    // for DefaultHasher
+#include <js/PropertyAndElement.h>
 #include <js/RootingAPI.h>
+#include <js/Stack.h>  // for BuildStackString
 #include <js/TypeDecls.h>
 #include <js/Utility.h>  // for UniqueChars
+#include <js/Value.h>
 #include <js/ValueArray.h>
-#include <jsapi.h>       // for JS_ReportErrorUTF8, BuildStackString
-#include <jspubtd.h>     // for JSProtoKey, JSProto_Error, JSProto...
+#include <jsapi.h>              // for JS_GetClassObject
+#include <jspubtd.h>            // for JSProtoKey, JSProto_Error, JSProto...
 
 #include "cjs/atoms.h"
 #include "cjs/context-private.h"
 #include "cjs/jsapi-util.h"
+#include "cjs/macros.h"
 #include "util/log.h"
 #include "util/misc.h"
+
+using CauseSet = JS::GCHashSet<JSObject*, js::DefaultHasher<JSObject*>,
+                               js::SystemAllocPolicy>;
+
+GJS_JSAPI_RETURN_CONVENTION
+static bool get_last_cause_impl(JSContext* cx, JS::HandleValue v_exc,
+                                JS::MutableHandleObject last_cause,
+                                JS::MutableHandle<CauseSet> seen_causes) {
+    if (!v_exc.isObject()) {
+        last_cause.set(nullptr);
+        return true;
+    }
+    JS::RootedObject exc(cx, &v_exc.toObject());
+    CauseSet::AddPtr entry = seen_causes.lookupForAdd(exc);
+    if (entry) {
+        last_cause.set(nullptr);
+        return true;
+    }
+    if (!seen_causes.add(entry, exc)) {
+        JS_ReportOutOfMemory(cx);
+        return false;
+    }
+
+    JS::RootedValue v_cause(cx);
+    const GjsAtoms& atoms = GjsContextPrivate::atoms(cx);
+    if (!JS_GetPropertyById(cx, exc, atoms.cause(), &v_cause))
+        return false;
+
+    if (v_cause.isUndefined()) {
+        last_cause.set(exc);
+        return true;
+    }
+
+    return get_last_cause_impl(cx, v_cause, last_cause, seen_causes);
+}
+
+GJS_JSAPI_RETURN_CONVENTION
+static bool get_last_cause(JSContext* cx, JS::HandleValue v_exc,
+                           JS::MutableHandleObject last_cause) {
+    JS::Rooted<CauseSet> seen_causes(cx);
+    return get_last_cause_impl(cx, v_exc, last_cause, &seen_causes);
+}
 
 /*
  * See:
@@ -52,34 +84,13 @@
  * So here is an awful hack inspired by
  * http://egachine.berlios.de/embedding-sm-best-practice/embedding-sm-best-practice.html#error-handling
  */
-static void
-G_GNUC_PRINTF(4, 0)
-gjs_throw_valist(JSContext       *context,
-                 JSProtoKey       error_kind,
-                 const char      *error_name,
-                 const char      *format,
-                 va_list          args)
-{
+[[gnu::format(printf, 4, 0)]] static void gjs_throw_valist(
+    JSContext* context, JSProtoKey error_kind, const char* error_name,
+    const char* format, va_list args) {
     char *s;
     bool result;
 
     s = g_strdup_vprintf(format, args);
-
-    if (JS_IsExceptionPending(context)) {
-        /* Often it's unclear whether a given jsapi.h function
-         * will throw an exception, so we will throw ourselves
-         * "just in case"; in those cases, we don't want to
-         * overwrite an exception that already exists.
-         * (Do log in case our second exception adds more info,
-         * but don't log as topic ERROR because if the exception is
-         * caught we don't want an ERROR in the logs.)
-         */
-        gjs_debug(GJS_DEBUG_CONTEXT,
-                  "Ignoring second exception: '%s'",
-                  s);
-        g_free(s);
-        return;
-    }
 
     JS::RootedObject constructor(context);
     JS::RootedValue v_constructor(context), exc_val(context);
@@ -95,8 +106,11 @@ gjs_throw_valist(JSContext       *context,
     if (!JS_GetClassObject(context, error_kind, &constructor))
         goto out;
 
+    v_constructor.setObject(*constructor);
+
     /* throw new Error(message) */
-    new_exc = JS_New(context, constructor, error_args);
+    if (!JS::Construct(context, v_constructor, error_args, &new_exc))
+        goto out;
 
     if (!new_exc)
         goto out;
@@ -110,7 +124,28 @@ gjs_throw_valist(JSContext       *context,
     }
 
     exc_val.setObject(*new_exc);
-    JS_SetPendingException(context, exc_val);
+
+    if (JS_IsExceptionPending(context)) {
+        // Often it's unclear whether a given jsapi.h function will throw an
+        // exception, so we will throw ourselves "just in case"; in those cases,
+        // we append the new exception as the cause of the original exception.
+        // The second exception may add more info.
+        const GjsAtoms& atoms = GjsContextPrivate::atoms(context);
+        JS::RootedValue pending(context);
+        JS_GetPendingException(context, &pending);
+        JS::RootedObject last_cause(context);
+        if (!get_last_cause(context, pending, &last_cause))
+            goto out;
+        if (last_cause) {
+            if (!JS_SetPropertyById(context, last_cause, atoms.cause(),
+                                    exc_val))
+                goto out;
+        } else {
+            gjs_debug(GJS_DEBUG_CONTEXT, "Ignoring second exception: '%s'", s);
+        }
+    } else {
+        JS_SetPendingException(context, exc_val);
+    }
 
     result = true;
 
@@ -157,11 +192,20 @@ gjs_throw_custom(JSContext  *cx,
                  ...)
 {
     va_list args;
-    g_return_if_fail(kind == JSProto_Error || kind == JSProto_InternalError ||
-                     kind == JSProto_EvalError || kind == JSProto_RangeError ||
-                     kind == JSProto_ReferenceError ||
-                     kind == JSProto_SyntaxError || kind == JSProto_TypeError ||
-                     kind == JSProto_URIError);
+
+    switch (kind) {
+        case JSProto_Error:
+        case JSProto_EvalError:
+        case JSProto_InternalError:
+        case JSProto_RangeError:
+        case JSProto_ReferenceError:
+        case JSProto_SyntaxError:
+        case JSProto_TypeError:
+        case JSProto_URIError:
+            break;
+        default:
+            g_return_if_reached();
+    }
 
     va_start(args, format);
     gjs_throw_valist(cx, kind, error_name, format, args);

@@ -1,43 +1,30 @@
 /* -*- mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
-/*
- * Copyright (c) 2008  litl, LLC
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to
- * deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
- */
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008 litl, LLC
 
 #include <config.h>
 
 #include <stdint.h>
 
+#include <string>
+
 #include <girepository.h>
 #include <glib-object.h>
 
+#include <js/CallAndConstruct.h>
 #include <js/CallArgs.h>
 #include <js/Class.h>
+#include <js/Exception.h>
+#include <js/PropertyAndElement.h>
 #include <js/PropertyDescriptor.h>  // for JSPROP_ENUMERATE
 #include <js/RootingAPI.h>
 #include <js/SavedFrameAPI.h>
+#include <js/Stack.h>  // for BuildStackString, CaptureCurrentStack
 #include <js/TypeDecls.h>
 #include <js/Utility.h>  // for UniqueChars
 #include <js/Value.h>
 #include <js/ValueArray.h>
-#include <jsapi.h>    // for JS_DefinePropertyById, JS_GetProp...
+#include <jsapi.h>    // for InformalValueTypeName, JS_GetClassObject
 #include <jspubtd.h>  // for JSProtoKey, JSProto_Error, JSProt...
 
 #include "gi/arg-inl.h"
@@ -49,6 +36,7 @@
 #include "cjs/context-private.h"
 #include "cjs/error-types.h"
 #include "cjs/jsapi-util.h"
+#include "cjs/macros.h"
 #include "cjs/mem-private.h"
 #include "util/log.h"
 
@@ -60,13 +48,12 @@ ErrorPrototype::ErrorPrototype(GIEnumInfo* info, GType gtype)
 
 ErrorPrototype::~ErrorPrototype(void) { GJS_DEC_COUNTER(gerror_prototype); }
 
-ErrorInstance::ErrorInstance(JSContext* cx, JS::HandleObject obj)
-    : GIWrapperInstance(cx, obj) {
+ErrorInstance::ErrorInstance(ErrorPrototype* prototype, JS::HandleObject obj)
+    : GIWrapperInstance(prototype, obj) {
     GJS_INC_COUNTER(gerror_instance);
 }
 
 ErrorInstance::~ErrorInstance(void) {
-    g_clear_error(&m_ptr);
     GJS_DEC_COUNTER(gerror_instance);
 }
 
@@ -111,14 +98,14 @@ bool ErrorInstance::constructor_impl(JSContext* context,
  * well as instances.
  */
 bool ErrorBase::get_domain(JSContext* cx, unsigned argc, JS::Value* vp) {
-    GJS_GET_WRAPPER_PRIV(cx, argc, vp, args, obj, ErrorBase, priv);
+    GJS_CHECK_WRAPPER_PRIV(cx, argc, vp, args, obj, ErrorBase, priv);
     args.rval().setInt32(priv->domain());
     return true;
 }
 
 // JSNative property getter for `message`.
 bool ErrorBase::get_message(JSContext* cx, unsigned argc, JS::Value* vp) {
-    GJS_GET_WRAPPER_PRIV(cx, argc, vp, args, obj, ErrorBase, priv);
+    GJS_CHECK_WRAPPER_PRIV(cx, argc, vp, args, obj, ErrorBase, priv);
     if (!priv->check_is_instance(cx, "get a field"))
         return false;
 
@@ -128,7 +115,7 @@ bool ErrorBase::get_message(JSContext* cx, unsigned argc, JS::Value* vp) {
 
 // JSNative property getter for `code`.
 bool ErrorBase::get_code(JSContext* cx, unsigned argc, JS::Value* vp) {
-    GJS_GET_WRAPPER_PRIV(cx, argc, vp, args, obj, ErrorBase, priv);
+    GJS_CHECK_WRAPPER_PRIV(cx, argc, vp, args, obj, ErrorBase, priv);
     if (!priv->check_is_instance(cx, "get a field"))
         return false;
 
@@ -156,8 +143,8 @@ bool ErrorBase::to_string(JSContext* context, unsigned argc, JS::Value* vp) {
         return gjs_string_from_utf8(context, descr, rec.rval());
     }
 
-    ErrorBase* priv = ErrorBase::for_js_typecheck(context, self, rec);
-    if (!priv)
+    ErrorBase* priv;
+    if (!for_js_typecheck(context, self, &priv, &rec))
         return false;
 
     /* We follow the same pattern as standard JS errors, at the expense of
@@ -188,8 +175,8 @@ bool ErrorBase::value_of(JSContext* context, unsigned argc, JS::Value* vp) {
         return false;
     }
 
-    ErrorBase* priv = ErrorBase::for_js_typecheck(context, prototype, rec);
-    if (!priv)
+    ErrorBase* priv;
+    if (!for_js_typecheck(context, prototype, &priv, &rec))
         return false;
 
     rec.rval().setInt32(priv->domain());
@@ -209,7 +196,7 @@ const struct JSClassOps ErrorBase::class_ops = {
 
 const struct JSClass ErrorBase::klass = {
     "GLib_Error",
-    JSCLASS_HAS_PRIVATE | JSCLASS_BACKGROUND_FINALIZE,
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_BACKGROUND_FINALIZE,
     &ErrorBase::class_ops
 };
 
@@ -354,7 +341,13 @@ gjs_error_from_js_gerror(JSContext *cx,
     if (!JS_GetClassObject(cx, error_kind, &error_constructor))
         return nullptr;
 
-    return JS_New(cx, error_constructor, error_args);
+    JS::RootedValue v_error_constructor(cx,
+                                        JS::ObjectValue(*error_constructor));
+    JS::RootedObject error(cx);
+    if (!JS::Construct(cx, v_error_constructor, error_args, &error))
+        return nullptr;
+
+    return error;
 }
 
 JSObject* ErrorInstance::object_for_c_ptr(JSContext* context, GError* gerror) {
@@ -371,14 +364,9 @@ JSObject* ErrorInstance::object_for_c_ptr(JSContext* context, GError* gerror) {
     if (!info) {
         /* We don't have error domain metadata */
         /* Marshal the error as a plain GError */
-        GIBaseInfo *glib_boxed;
-        JSObject *retval;
-
-        glib_boxed = g_irepository_find_by_name(nullptr, "GLib", "Error");
-        retval = BoxedInstance::new_for_c_struct(context, glib_boxed, gerror);
-
-        g_base_info_unref(glib_boxed);
-        return retval;
+        GjsAutoBaseInfo glib_boxed =
+            g_irepository_find_by_name(nullptr, "GLib", "Error");
+        return BoxedInstance::new_for_c_struct(context, glib_boxed, gerror);
     }
 
     gjs_debug_marshal(GJS_DEBUG_GBOXED,
@@ -451,10 +439,8 @@ bool ErrorBase::typecheck(JSContext* cx, JS::HandleObject obj,
     return GIWrapperBase::typecheck(cx, obj, nullptr, G_TYPE_ERROR, no_throw);
 }
 
-GError *
-gjs_gerror_make_from_error(JSContext       *cx,
-                           JS::HandleObject obj)
-{
+GJS_JSAPI_RETURN_CONVENTION
+static GError* gerror_from_error_impl(JSContext* cx, JS::HandleObject obj) {
     if (ErrorBase::typecheck(cx, obj, GjsTypecheckNoThrow())) {
         /* This is already a GError, just copy it */
         GError* inner = ErrorBase::to_c_ptr(cx, obj);
@@ -470,12 +456,18 @@ gjs_gerror_make_from_error(JSContext       *cx,
     if (!JS_GetPropertyById(cx, obj, atoms.name(), &v_name))
         return nullptr;
 
-    JS::UniqueChars name = gjs_string_to_utf8(cx, v_name);
-    if (!name)
-        return nullptr;
-
     JS::RootedValue v_message(cx);
     if (!JS_GetPropertyById(cx, obj, atoms.message(), &v_message))
+        return nullptr;
+
+    if (!v_name.isString() || !v_message.isString()) {
+        return g_error_new_literal(
+            GJS_JS_ERROR, GJS_JS_ERROR_ERROR,
+            "Object thrown with unexpected name or message property");
+    }
+
+    JS::UniqueChars name = gjs_string_to_utf8(cx, v_name);
+    if (!name)
         return nullptr;
 
     JS::UniqueChars message = gjs_string_to_utf8(cx, v_message);
@@ -491,6 +483,44 @@ gjs_gerror_make_from_error(JSContext       *cx,
         code = GJS_JS_ERROR_ERROR;
 
     return g_error_new_literal(GJS_JS_ERROR, code, message.get());
+}
+
+/*
+ * gjs_gerror_make_from_thrown_value:
+ *
+ * Attempts to convert a JavaScript thrown value (pending on @cx) into a
+ * #GError. This function is infallible and will always return a #GError with
+ * some message, even if the exception value couldn't be converted.
+ *
+ * Clears the pending exception on @cx.
+ *
+ * Returns: (transfer full): a new #GError
+ */
+GError* gjs_gerror_make_from_thrown_value(JSContext* cx) {
+    g_assert(JS_IsExceptionPending(cx) &&
+             "Should be called when an exception is pending");
+
+    JS::RootedValue exc(cx);
+    JS_GetPendingException(cx, &exc);
+    JS_ClearPendingException(cx);  // don't log
+
+    if (!exc.isObject()) {
+        return g_error_new(GJS_JS_ERROR, GJS_JS_ERROR_ERROR,
+                           "Non-exception %s value %s thrown",
+                           JS::InformalValueTypeName(exc),
+                           gjs_debug_value(exc).c_str());
+    }
+
+    JS::RootedObject obj(cx, &exc.toObject());
+    GError* retval = gerror_from_error_impl(cx, obj);
+    if (retval)
+        return retval;
+
+    // Make a GError with an InternalError even if it wasn't possible to convert
+    // the exception into one
+    gjs_log_exception(cx);  // log the inner exception
+    return g_error_new_literal(GJS_JS_ERROR, GJS_JS_ERROR_INTERNAL_ERROR,
+                               "Failed to convert JS thrown value into GError");
 }
 
 /*

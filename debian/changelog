@@ -1,3 +1,78 @@
+cjs (5.8.0-3) unstable; urgency=medium
+
+  * Release to unstable
+
+ -- Fabio Fantoni <fantonifabio@tiscali.it>  Sun, 17 Sep 2023 21:08:47 +0200
+
+cjs (5.8.0-2) experimental; urgency=medium
+
+  * Add cjs-tests package that contain installed tests
+  * Add significant autopkgtest using cjs-tests package
+
+ -- Fabio Fantoni <fantonifabio@tiscali.it>  Tue, 13 Jun 2023 21:23:28 +0200
+
+cjs (5.8.0-1) experimental; urgency=medium
+
+  * autopkgtest: marked as superficial (Closes: #1032900)
+  * New upstream version 5.8.0 (Closes: #1035931)
+  * Various packaging changes for upstream gjs 1.74.2 rebase
+  * Update symbols
+  * Update breaks to cinnamon 5.6.8
+  * Bump Standards-Version to 4.6.2, no changes required
+
+ -- Fabio Fantoni <fantonifabio@tiscali.it>  Fri, 09 Jun 2023 14:32:25 +0200
+
+cjs (5.6.0-1) unstable; urgency=medium
+
+  * New upstream version 5.6.0
+  * More strict deps with shlibs to avoid partial upgrades
+
+ -- Fabio Fantoni <fantonifabio@tiscali.it>  Sat, 19 Nov 2022 15:38:40 +0100
+
+cjs (5.4.1-1) unstable; urgency=medium
+
+  * New upstream version 5.4.1
+  * Improve d/gbp.conf
+  * Release to unstable
+
+ -- Fabio Fantoni <fantonifabio@tiscali.it>  Sun, 14 Aug 2022 11:07:03 +0200
+
+cjs (5.4.0-1) experimental; urgency=medium
+
+  * New upstream version 5.4.0
+  * Simplify d/watch
+  * Various packaging changes for upstream gjs 1.70.0-4 rebase
+  * Update symbols
+
+ -- Fabio Fantoni <fantonifabio@tiscali.it>  Sun, 10 Jul 2022 22:32:37 +0200
+
+cjs (5.2.0-2) unstable; urgency=medium
+
+  * Remove d/patch workaround for FTBFS with meson 0.60.2,
+    was meson regression solved in 0.60.3
+
+ -- Fabio Fantoni <fantonifabio@tiscali.it>  Sat, 15 Jan 2022 10:57:35 +0100
+
+cjs (5.2.0-1) experimental; urgency=medium
+
+  [ Joshua Peisach ]
+  * New upstream version 5.2.0
+  * Add myself as Uploader
+  * Bump cinnamon conflict versions to 5.0
+  * Bump watch version to 4
+  * Remove as-needed linker flag
+  * Remove a patch applied upstream
+  * Bump Standards-Version to 4.6.0.1, no changes required
+  * Add missing copyright field
+
+  [ Fabio Fantoni ]
+  * removed pkg-kde-tools build-dep as not needed anymore
+  * Use dh-sequence-gir and dh-sequence-gnome
+  * d/patches: fix build with meson >=0.60.2 (Closes: #1002110)
+  * d/control: improve packages description
+
+ -- Fabio Fantoni <fantonifabio@tiscali.it>  Sun, 26 Dec 2021 13:46:09 +0100
+
 cjs (5.0.0-2) unstable; urgency=medium
 
   [ Fabio Fantoni ]

@@ -1,11 +1,8 @@
-#!/usr/bin/env gjs
+#!/usr/bin/env cjs
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2016 Philip Chimento <philip.chimento@gmail.com>
 
-const GLib = imports.gi.GLib;
-
-function _removeNewlines(str) {
-    let allNewlines = /\n/g;
-    return str.replace(allNewlines, '\\n');
-}
+import GLib from 'gi://GLib';
 
 function _filterStack(stack) {
     if (!stack)
@@ -13,36 +10,22 @@ function _filterStack(stack) {
 
     return stack.split('\n')
         .filter(stackLine => stackLine.indexOf('resource:///org/gjs/jsunit') === -1)
-        .filter(stackLine => stackLine.indexOf('<jasmine-start>') === -1)
         .join('\n');
 }
 
-function _setTimeoutInternal(continueTimeout, func, time) {
-    return GLib.timeout_add(GLib.PRIORITY_DEFAULT, time, function () {
-        func();
-        return continueTimeout;
-    });
-}
-
-function _clearTimeoutInternal(id) {
-    if (id > 0)
-        GLib.source_remove(id);
-}
-
-// Install the browser setTimeout/setInterval API on the global object
-globalThis.setTimeout = _setTimeoutInternal.bind(undefined, GLib.SOURCE_REMOVE);
-globalThis.setInterval = _setTimeoutInternal.bind(undefined, GLib.SOURCE_CONTINUE);
-globalThis.clearTimeout = globalThis.clearInterval = _clearTimeoutInternal;
-
 let jasmineRequire = imports.jasmine.getJasmineRequireObj();
 let jasmineCore = jasmineRequire.core(jasmineRequire);
-globalThis._jasmineEnv = jasmineCore.getEnv();
 
-globalThis._jasmineMain = GLib.MainLoop.new(null, false);
-globalThis._jasmineRetval = 0;
+export let environment = jasmineCore.getEnv();
+environment.configure({
+    random: false,
+});
+export const mainloop = GLib.MainLoop.new(null, false);
+export let retval = 0;
+export let errorsOutput = [];
 
 // Install Jasmine API on the global object
-let jasmineInterface = jasmineRequire.interface(jasmineCore, globalThis._jasmineEnv);
+let jasmineInterface = jasmineRequire.interface(jasmineCore, environment);
 Object.assign(globalThis, jasmineInterface);
 
 // Reporter that outputs according to the Test Anything Protocol
@@ -65,7 +48,7 @@ class TapReporter {
             });
         });
 
-        globalThis._jasmineMain.quit();
+        mainloop.quit();
     }
 
     suiteDone(result) {
@@ -91,7 +74,8 @@ class TapReporter {
             tapReport = 'ok';
         }
         tapReport += ` ${this._specCount} ${result.fullName}`;
-        if (result.status === 'pending' || result.status === 'disabled') {
+        if (result.status === 'pending' || result.status === 'disabled' ||
+            result.status === 'excluded') {
             let reason = result.pendingReason || result.status;
             tapReport += ` # SKIP ${reason}`;
         }
@@ -100,20 +84,60 @@ class TapReporter {
         // Print additional diagnostic info on failure
         if (result.status === 'failed' && result.failedExpectations) {
             result.failedExpectations.forEach(failedExpectation => {
-                print('# Message:', _removeNewlines(failedExpectation.message));
-                print('# Stack:');
+                const output = [];
+                const messageLines = failedExpectation.message.split('\n');
+                output.push(`Message: ${messageLines.shift()}`);
+                output.push(...messageLines.map(str => `  ${str}`));
+                output.push('Stack:');
                 let stackTrace = _filterStack(failedExpectation.stack).trim();
-                print(stackTrace.split('\n').map(str => `#   ${str}`).join('\n'));
+                output.push(...stackTrace.split('\n').map(str => `  ${str}`));
+
+                if (errorsOutput.length) {
+                    errorsOutput.push(
+                        Array(GLib.getenv('COLUMNS') || 80).fill('―').join(''));
+                }
+
+                errorsOutput.push(`Test: ${result.fullName}`);
+                errorsOutput.push(...output);
+                print(output.map(l => `# ${l}`).join('\n'));
             });
         }
     }
 }
 
-globalThis._jasmineEnv.addReporter(new TapReporter());
+environment.addReporter(new TapReporter());
 
-// If we're running the tests in certain JS_GC_ZEAL modes, then some will time
-// out if the CI machine is under a certain load. In that case increase the
-// default timeout.
+// If we're running the tests in certain JS_GC_ZEAL modes or Valgrind, then some
+// will time out if the CI machine is under a certain load. In that case
+// increase the default timeout.
 const gcZeal = GLib.getenv('JS_GC_ZEAL');
-if (gcZeal && (gcZeal === '2' || gcZeal.startsWith('2,') || gcZeal === '4'))
+const valgrind = GLib.getenv('VALGRIND');
+if (valgrind || (gcZeal && (gcZeal === '2' || gcZeal.startsWith('2,') || gcZeal === '4')))
     jasmine.DEFAULT_TIMEOUT_INTERVAL *= 5;
+
+/**
+ * The Promise (or null) that minijasmine-executor locks on
+ * to avoid exiting prematurely
+ */
+export let mainloopLock = null;
+
+/**
+ * Stops the mainloop but prevents the minijasmine-executor from
+ * exiting.
+ *
+ * @returns a callback which returns control to minijasmine-executor
+ */
+export function acquireMainloop() {
+    let resolve;
+    mainloopLock = new Promise(_resolve => (resolve = _resolve));
+
+    if (!mainloop.is_running())
+        throw new Error("Main loop was stopped already, can't acquire");
+
+    mainloop.quit();
+
+    return () => {
+        mainloopLock = null;
+        resolve(true);
+    };
+}

@@ -1,34 +1,30 @@
 /* -*- mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
-/*
- * SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
- *
- * Copyright (c) 2008  litl, LLC
- * Copyright (c) 2009 Red Hat, Inc.
- */
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008 litl, LLC
+// SPDX-FileCopyrightText: 2009 Red Hat, Inc.
 
 #include <config.h>
+
+#include <string>
 
 #include <glib.h>
 
 #include <js/CallArgs.h>
 #include <js/CharacterEncoding.h>  // for JS_EncodeStringToUTF8
 #include <js/Conversions.h>
+#include <js/Exception.h>
+#include <js/PropertyAndElement.h>  // for JS_DefineFunctions
 #include <js/PropertySpec.h>  // for JS_FN, JSFunctionSpec, JS_FS_END
 #include <js/RootingAPI.h>
 #include <js/TypeDecls.h>
 #include <js/Utility.h>  // for UniqueChars
-#include <jsapi.h>
+#include <js/Value.h>
+#include <jsapi.h>  // for JS_NewPlainObject
 
+#include "cjs/global.h"
 #include "cjs/jsapi-util.h"
+#include "cjs/macros.h"
 #include "modules/print.h"
-
-// Avoid static_assert in MSVC builds
-namespace JS {
-template <typename T> struct GCPolicy;
-
-template <>
-struct GCPolicy<void*> : public IgnoreGCPolicy<void*> {};
-}
 
 GJS_JSAPI_RETURN_CONVENTION
 static bool gjs_log(JSContext* cx, unsigned argc, JS::Value* vp) {
@@ -89,8 +85,9 @@ static bool gjs_log_error(JSContext* cx, unsigned argc, JS::Value* vp) {
 
 GJS_JSAPI_RETURN_CONVENTION
 static bool gjs_print_parse_args(JSContext* cx, const JS::CallArgs& argv,
-                                 GjsAutoChar* buffer) {
-    GString* str = g_string_new("");
+                                 std::string* buffer) {
+    g_assert(buffer && "forgot out parameter");
+    buffer->clear();
     for (unsigned n = 0; n < argv.length(); ++n) {
         /* JS::ToString might throw, in which case we will only log that the
          * value could not be converted to string */
@@ -100,23 +97,17 @@ static bool gjs_print_parse_args(JSContext* cx, const JS::CallArgs& argv,
 
         if (jstr) {
             JS::UniqueChars s(JS_EncodeStringToUTF8(cx, jstr));
-            if (!s) {
-                g_string_free(str, true);
+            if (!s)
                 return false;
-            }
 
-            g_string_append(str, s.get());
+            *buffer += s.get();
             if (n < (argv.length() - 1))
-                g_string_append_c(str, ' ');
+                *buffer += ' ';
         } else {
-            *buffer = g_string_free(str, true);
-            if (!*buffer)
-                *buffer = g_strdup("<invalid string>");
+            *buffer = "<invalid string>";
             return true;
         }
     }
-    *buffer = g_string_free(str, false);
-
     return true;
 }
 
@@ -124,11 +115,11 @@ GJS_JSAPI_RETURN_CONVENTION
 static bool gjs_print(JSContext* context, unsigned argc, JS::Value* vp) {
     JS::CallArgs argv = JS::CallArgsFromVp(argc, vp);
 
-    GjsAutoChar buffer;
+    std::string buffer;
     if (!gjs_print_parse_args(context, argv, &buffer))
         return false;
 
-    g_print("%s\n", buffer.get());
+    g_print("%s\n", buffer.c_str());
 
     argv.rval().setUndefined();
     return true;
@@ -138,13 +129,56 @@ GJS_JSAPI_RETURN_CONVENTION
 static bool gjs_printerr(JSContext* context, unsigned argc, JS::Value* vp) {
     JS::CallArgs argv = JS::CallArgsFromVp(argc, vp);
 
-    GjsAutoChar buffer;
+    std::string buffer;
     if (!gjs_print_parse_args(context, argv, &buffer))
         return false;
 
-    g_printerr("%s\n", buffer.get());
+    g_printerr("%s\n", buffer.c_str());
 
     argv.rval().setUndefined();
+    return true;
+}
+
+// The pretty-print functionality is best written in JS, but needs to be used
+// from C++ code. This stores the prettyPrint() function in a slot on the global
+// object so that it can be used internally by the Console module.
+// This function is not available to user code.
+GJS_JSAPI_RETURN_CONVENTION
+static bool set_pretty_print_function(JSContext*, unsigned argc,
+                                      JS::Value* vp) {
+    JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+
+    // can only be called internally, so OK to assert correct arguments
+    g_assert(args.length() == 2 && "setPrettyPrintFunction takes 2 arguments");
+
+    JS::Value v_global = args[0];
+    JS::Value v_func = args[1];
+
+    g_assert(v_global.isObject() && "first argument must be an object");
+    g_assert(v_func.isObject() && "second argument must be an object");
+
+    gjs_set_global_slot(&v_global.toObject(), GjsGlobalSlot::PRETTY_PRINT_FUNC,
+                        v_func);
+
+    args.rval().setUndefined();
+    return true;
+}
+
+GJS_JSAPI_RETURN_CONVENTION
+static bool get_pretty_print_function(JSContext*, unsigned argc,
+                                      JS::Value* vp) {
+    JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+
+    g_assert(args.length() == 1 && "getPrettyPrintFunction takes 1 arguments");
+
+    JS::Value v_global = args[0];
+
+    g_assert(v_global.isObject() && "argument must be an object");
+
+    JS::Value pretty_print = gjs_get_global_slot(
+        &v_global.toObject(), GjsGlobalSlot::PRETTY_PRINT_FUNC);
+
+    args.rval().set(pretty_print);
     return true;
 }
 
@@ -154,6 +188,8 @@ static constexpr JSFunctionSpec funcs[] = {
     JS_FN("logError", gjs_log_error, 2, GJS_MODULE_PROP_FLAGS),
     JS_FN("print", gjs_print, 0, GJS_MODULE_PROP_FLAGS),
     JS_FN("printerr", gjs_printerr, 0, GJS_MODULE_PROP_FLAGS),
+    JS_FN("setPrettyPrintFunction", set_pretty_print_function, 1, GJS_MODULE_PROP_FLAGS),
+    JS_FN("getPrettyPrintFunction", get_pretty_print_function, 1, GJS_MODULE_PROP_FLAGS),
     JS_FS_END};
 // clang-format on
 

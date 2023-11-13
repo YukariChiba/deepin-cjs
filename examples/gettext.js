@@ -1,14 +1,29 @@
-imports.gi.versions.Gtk = '3.0';
-const Gettext = imports.gettext;
-const Gtk = imports.gi.Gtk;
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2009 Red Hat, Inc.
 
-Gettext.bindtextdomain('gnome-panel-3.0', '/usr/share/locale');
-Gettext.textdomain('gnome-panel-3.0');
+/*
+ * Make sure you have a non english locale installed, for example fr_FR and run
+ * LANGUAGE=fr_FR gjs -m gettext.js
+ * the label should show a translation of 'Print help'
+ */
 
-Gtk.init(null);
+import Gettext, {gettext as _} from 'gettext';
+import Gtk from 'gi://Gtk?version=4.0';
+import GLib from 'gi://GLib';
 
-let w = new Gtk.Window({type: Gtk.WindowType.TOPLEVEL});
-w.add(new Gtk.Label({label: Gettext.gettext('Panel')}));
-w.show_all();
+Gtk.init();
 
-Gtk.main();
+let loop = GLib.MainLoop.new(null, false);
+
+Gettext.bindtextdomain('gnome-shell', '/usr/share/locale');
+Gettext.textdomain('gnome-shell');
+
+let window = new Gtk.Window({title: 'gettext'});
+window.set_child(new Gtk.Label({label: _('Print help')}));
+window.connect('close-request', () => {
+    loop.quit();
+});
+
+window.present();
+
+loop.run();

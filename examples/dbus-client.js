@@ -1,8 +1,8 @@
-'use strict';
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2020 Andy Holmes <andrew.g.r.holmes@gmail.com>
 
-const GLib = imports.gi.GLib;
-const Gio = imports.gi.Gio;
-
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 
 /*
  * An XML DBus Interface
@@ -48,8 +48,8 @@ function onNameAppeared(connection, name, _owner) {
             'org.gnome.gjs.Test',
             '/org/gnome/gjs/Test'
         );
-    } catch (e) {
-        logError(e);
+    } catch (err) {
+        logError(err);
         return;
     }
 
@@ -86,12 +86,11 @@ function onNameAppeared(connection, name, _owner) {
         let value = proxy.SimpleMethodSync();
 
         print(`SimpleMethod: ${value}`);
-    } catch (e) {
-        logError(`SimpleMethod: ${e.message}`);
+    } catch (err) {
+        logError(`SimpleMethod: ${err.message}`);
     }
 
     proxy.ComplexMethodRemote('input string', (value, error, fdList) => {
-
         // If @error is not `null`, then an error occurred
         if (error !== null) {
             logError(error);

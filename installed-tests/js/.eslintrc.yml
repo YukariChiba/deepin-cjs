@@ -1,4 +1,6 @@
 ---
+# SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+# SPDX-FileCopyrightText: 2018 Philip Chimento <philip.chimento@gmail.com>
 env:
   jasmine: true
 rules:
@@ -12,8 +14,6 @@ rules:
     - error
     - selector: CallExpression[callee.name="it"] > ArrowFunctionExpression
       message: Arrow functions can mess up some Jasmine APIs. Use function () instead
-    - selector: CallExpression[callee.name="describe"] > ArrowFunctionExpression
-      message: Arrow functions can mess up some Jasmine APIs. Use function () instead
     - selector: CallExpression[callee.name="beforeEach"] > ArrowFunctionExpression
       message: Arrow functions can mess up some Jasmine APIs. Use function () instead
     - selector: CallExpression[callee.name="afterEach"] > ArrowFunctionExpression
@@ -22,8 +22,21 @@ rules:
       message: Arrow functions can mess up some Jasmine APIs. Use function () instead
     - selector: CallExpression[callee.name="afterAll"] > ArrowFunctionExpression
       message: Arrow functions can mess up some Jasmine APIs. Use function () instead
-globals:
-  clearInterval: writable
-  clearTimeout: writable
-  setInterval: writable
-  setTimeout: writable
+overrides:
+  - files:
+      - matchers.js
+      - minijasmine.js
+      - minijasmine-executor.js
+      - testAsync.js
+      - testAsyncMainloop.js
+      - testCairoModule.js
+      - testConsole.js
+      - testESModules.js
+      - testEncoding.js
+      - testGLibLogWriter.js
+      - testTimers.js
+      - modules/importmeta.js
+      - modules/exports.js
+      - modules/say.js
+    parserOptions:
+      sourceType: module

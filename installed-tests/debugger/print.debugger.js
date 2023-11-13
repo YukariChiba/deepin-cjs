@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2018 Philip Chimento <philip.chimento@gmail.com>
 const {GObject} = imports.gi;
 const a = undefined;
 const b = null;
@@ -12,5 +14,7 @@ const j = new Set([5, 6, 7]);
 const k = class J {};
 const l = new GObject.Object();
 const m = new Error('message');
+const n = {a: 1};
+const o = {some: 'plain object', [Symbol('that')]: 'has symbols'};
 debugger;
-void (a, b, c, d, e, f, g, h, i, j, k, l, m);
+void (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o);

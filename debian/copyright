@@ -4,31 +4,74 @@ Upstream-Contact: Clement Lefebvre <clement.lefebvre@linuxmint.com>
 Source: https://github.com/linuxmint/cjs
 
 Files: *
-Copyright: 2019-2020, Canonical, Ltd
-           2016, Christian Hergert <christian@hergert.me>
-           2017, Chun-wei Fan
-           2014, Colin Walters <walters@verbum.org>
-           2020, Endless Mobile Inc
-           2013-2018, Endless Mobile, Inc
-           2019-2020, Evan Welsh <contact@evanwelsh.com>
-           2011-2013, Giovanni Campagna <scampa.giovanni@gmail.com>
-           2013, Intel Corporation
-           2011, Jasper St. Pierre
-           2020, Marco Trevisan <marco.trevisan@canonical.com>
-           2016-2020, Philip Chimento <philip.chimento@gmail.com>
-           2008-2016, Pivotal Labs
-           2009-2014, Red Hat, Inc
-           2006-2007, Zeh Fernando and Nate Chatellier
-           2008-2010, litl, LLC
+Copyright:
+    2017-2021 Andy Holmes
+    2017-2021 Canonical, Ltd.
+    2016 Christian Hergert
+    2017-2019 Chun-wei Fan
+    2017-2018 Claudio André
+    2014 Colin Walters
+    2010 Collabora, Ltd.
+    2011-2020 Current and former GJS maintainers
+    2014-2019 Endless Mobile, Inc.
+    2020 Evan Welsh
+    2011-2013 Giovanni Campagna
+    2013 Intel Corporation
+    2011 Jasper St. Pierre
+    2014 Jonas Danielsson
+    2013 Lionel Landwerlin
+    2021 Mantoh Nasah Kuma
+    2018-2021 Marco Trevisan
+    2020 Ole Jørgen Brønner
+    2017 Patrick Griffis
+    2013 Pavel Vasin
+    2016-2021 Philip Chimento
+    2008-2018 Red Hat, Inc.
+    2008 Robert Carr
+    2019-2021 Sonny Piers
+    2008-2010 litl, LLC
+License: Expat or LGPL-2.0+
+
+Files:
+ *README*
+ CONTRIBUTING.md
+ NEWS
+ build/flatpak/org.gnome.*.json
+ doc/*
+ examples/test.jpg
+ installed-tests/js/modules/data.txt
+ tools/heapgraph.md
+ tools/yarn.lock
+Copyright: No rights reserved
+License: CC0-1.0
+
+Files:
+ installed-tests/js/jasmine.js
+ modules/esm/_encoding/util.js
+ modules/script/_legacy.js
+ modules/script/tweener/tweenList.js
+ modules/script/tweener/tweener.js
+ tools/apply-format
+ tools/git-pre-commit-format
+Copyright:
+ 2008-2020 Pivotal Labs
+ 2008 litl, LLC
+ 2011 Jasper St. Pierre
+ 2006-2007 Nate Chatellier
+ 2006-2007 Zeh Fernando
+ 2018 Undo Ltd.
+ Node.js contributors
 License: Expat
 
-Files: cjs/stack.cpp
-       modules/console.cpp
-       modules/script/jsUnit.js
-Copyright: 2001-2004, Edward Hieatt <edward@jsunit.net>
-           2008, litl, LLC
-           1998-2003, the Initial Developer
-License: MPL-1.1 or GPL-2+ or LGPL-2.1+
+Files: debian/*
+Copyright:
+    2009 Collabora Ltd.
+License: Expat
+
+Files:
+ modules/console.cpp
+ modules/script/jsUnit.js
+License: MPL-1.1 or GPL-2.0+ or LGPL-2.1+
     The contents of this file are subject to the Mozilla Public License Version
     1.1 (the "License"); you may not use this file except in compliance with
     the License. You may obtain a copy of the License at
@@ -61,29 +104,46 @@ License: MPL-1.1 or GPL-2+ or LGPL-2.1+
     the provisions above, a recipient may use your version of this file under
     the terms of any one of the MPL, the GPL or the LGPL.
 Copyright:
-    Copyright © 2008 litl, LLC
-              © 1998 Netscape Communications Corporation
+ 2008 litl, LLC
+ 1998 Netscape Communications Corporation
+ 2001-2004 Edward Hieatt
 Comment:
  The GPLv2, LGPLv2.1 and MPLv1.1 files can be obtained, on Debian systems,
  at /usr/share/common-licenses/GPL-2, /usr/share-common-licenses/LGPL-2.1
  and /usr/share/common-licenses/MPL-1.1, respectively.
 
-Files: modules/script/_bootstrap/debugger.js
-       tools/heapdot.py
-       tools/heapgraph.py
-License: MPL-2
- This Source Code Form is subject to the terms of the Mozilla Public
- License, v. 2.0. If a copy of the MPL was not distributed with this
- file, You can obtain one at http://mozilla.org/MPL/2.0/.
-Comment:
- Based on js/examples/jorendb.js from mozjs60.
- .
- On Debian systems a copy of the MPLv2.0 can be found in
- /usr/share/common-licenses/MPL-2.0
+Files:
+ modules/script/_bootstrap/debugger.js
+ tools/heapdot.py
+ tools/heapgraph.py
+Copyright:
+ 1998 Netscape Communications Corporation
+ 1998-2018 Mozilla Project
+ 2018 Philip Chimento
+ 2011 Mozilla Foundation and contributors
+ 2013-2018 Andrew McCreight
+ 2018 Andy Holmes
+License: MPL-2.0
 
-Files: modules/script/tweener/equations.js
-Copyright: 2001, Robert Penner
-           2008, litl, LLC
+Files:
+ modules/script/tweener/equations.js
+ installed-tests/js/modules/encodings.json
+Copyright:
+    2001 Robert Penner
+    2008 litl, LLC.
+    WHATWG (Apple, Google, Mozilla, Microsoft)
+License: BSD-3-clause
+
+Files:
+ subprojects/*.wrap
+ tools/lcovrc
+Copyright:
+ 2020 Endless Mobile, Inc.
+ 2017 Nirbheek Chauhan
+ 2018 The Meson development team
+ 2018 Endless Mobile, Inc.
+License: LGPL-2.1+ and Expat
+
 License: BSD-3-clause
  Redistribution and use in source and binary forms, with or without
  modification, are permitted provided that the following conditions are met:
@@ -108,9 +168,10 @@ License: BSD-3-clause
  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
  OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Files: debian/*
-Copyright: 2009, Collabora Ltd
-License: Expat
+License: CC0-1.0
+ SPDX license expression "CC0-1.0": https://spdx.org/licenses/CC0-1.0.html
+ On Debian systems, the complete text of the CC0 Public Domain Dedication
+ can be found in "/usr/share/common-licenses/CC0-1.0".
 
 License: Expat
     Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -130,3 +191,21 @@ License: Expat
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
     IN THE SOFTWARE.
+
+License: LGPL-2.0+
+ SPDX license expression LGPL-2.0-or-later refers to the GNU Library General
+ Public License, version 2.0 or any later version. On a Debian system, see
+ /usr/share/common-licenses/LGPL-2 for a copy of this license.
+
+License: LGPL-2.1+
+ SPDX license expression LGPL-2.1-or-later refers to the GNU Lesser General
+ Public License, version 2.1 or any later version. On a Debian system, see
+ /usr/share/common-licenses/LGPL-2.1 for a copy of this license.
+
+License: MPL-2.0
+ This Source Code Form is subject to the terms of the Mozilla Public
+ License, v. 2.0. If a copy of the MPL was not distributed with this
+ file, You can obtain one at http://mozilla.org/MPL/2.0/.
+Comment:
+ On Debian systems a copy of the MPLv2.0 can be found in
+ /usr/share/common-licenses/MPL-2.0

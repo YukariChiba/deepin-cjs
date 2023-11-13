@@ -1,28 +1,11 @@
 /* exported _init, interfaces, properties, registerClass, requires, signals */
-// Copyright 2011 Jasper St. Pierre
-// Copyright 2017 Philip Chimento <philip.chimento@gmail.com>, <philip@endlessm.com>
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to
-// deal in the Software without restriction, including without limitation the
-// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-// sell copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-// IN THE SOFTWARE.
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2011 Jasper St. Pierre
+// SPDX-FileCopyrightText: 2017 Philip Chimento <philip.chimento@gmail.com>, <philip@endlessm.com>
 
 const Gi = imports._gi;
-const CjsPrivate = imports.gi.CjsPrivate;
-const {_checkAccessors} = imports._common;
+const {CjsPrivate, GLib} = imports.gi;
+const {_checkAccessors, _registerType} = imports._common;
 const Legacy = imports._legacy;
 
 let GObject;
@@ -87,12 +70,56 @@ function registerClass(...args) {
             `class (is ${Object.getPrototypeOf(klass).name})`);
     }
 
+    if ('_classInit' in klass) {
+        klass = klass._classInit(klass);
+    } else {
+        // Lang.Class compatibility.
+        klass = _resolveLegacyClassFunction(klass, '_classInit')(klass);
+    }
+
+    return klass;
+}
+
+function _resolveLegacyClassFunction(klass, func) {
     // Find the "least derived" class with a _classInit static function; there
     // definitely is one, since this class must inherit from GObject
     let initclass = klass;
-    while (typeof initclass._classInit === 'undefined')
+    while (typeof initclass[func] === 'undefined')
         initclass = Object.getPrototypeOf(initclass.prototype).constructor;
-    return initclass._classInit(klass);
+    return initclass[func];
+}
+
+function _defineGType(klass, giPrototype, registeredType) {
+    const config = {
+        enumerable: false,
+        configurable: false,
+    };
+
+    /**
+     * class Example {
+     *     // The JS object for this class' ObjectPrototype
+     *     static [Gi.gobject_prototype_symbol] = ...
+     *     static get $gtype () {
+     *         return ...;
+     *     }
+     * }
+     *
+     * // Equal to the same property on the constructor
+     * Example.prototype[Gi.gobject_prototype_symbol] = ...
+     */
+
+    Object.defineProperty(klass, '$gtype', {
+        ...config,
+        get() {
+            return registeredType;
+        },
+    });
+
+    Object.defineProperty(klass.prototype, Gi.gobject_prototype_symbol, {
+        ...config,
+        writable: false,
+        value: giPrototype,
+    });
 }
 
 // Some common functions between GObject.Class and GObject.Interface
@@ -168,6 +195,9 @@ function _createGTypeName(klass) {
             gtypeClassName = `${callerBasename}_${gtypeClassName}`;
     }
 
+    if (gtypeClassName === '')
+        gtypeClassName = `anonymous_${GLib.uuid_string_random()}`;
+
     return sanitizeGType(`Gjs_${gtypeClassName}`);
 }
 
@@ -180,14 +210,21 @@ function _propertiesAsArray(klass) {
     return propertiesArray;
 }
 
-function _copyAllDescriptors(target, source, filter) {
-    Object.getOwnPropertyNames(source)
-    .filter(key => !['prototype', 'constructor'].concat(filter).includes(key))
-    .concat(Object.getOwnPropertySymbols(source))
-    .forEach(key => {
-        let descriptor = Object.getOwnPropertyDescriptor(source, key);
-        Object.defineProperty(target, key, descriptor);
-    });
+function _copyInterfacePrototypeDescriptors(targetPrototype, sourceInterface) {
+    Object.entries(Object.getOwnPropertyDescriptors(sourceInterface))
+        .filter(([key, descriptor]) =>
+            // Don't attempt to copy the constructor or toString implementations
+            !['constructor', 'toString'].includes(key) &&
+            // Ignore properties starting with __
+            (typeof key !== 'string' || !key.startsWith('__')) &&
+            // Don't override an implementation on the target
+            !targetPrototype.hasOwnProperty(key) &&
+            descriptor &&
+            // Only copy if the descriptor has a getter, is a function, or is enumerable.
+            (typeof descriptor.value === 'function' || descriptor.get || descriptor.enumerable))
+        .forEach(([key, descriptor]) => {
+            Object.defineProperty(targetPrototype, key, descriptor);
+        });
 }
 
 function _interfacePresent(required, klass) {
@@ -236,8 +273,15 @@ function _checkInterface(iface, proto) {
     }
 }
 
-function _init() {
+function _checkProperties(klass) {
+    if (!klass.hasOwnProperty(properties))
+        return;
 
+    for (let pspec of Object.values(klass[properties]))
+        _checkAccessors(klass.prototype, pspec, GObject);
+}
+
+function _init() {
     GObject = this;
 
     function _makeDummyClass(obj, name, upperName, gtypeName, actual) {
@@ -278,6 +322,10 @@ function _init() {
     GObject.TYPE_STRING = GObject.type_from_name('gchararray');
     GObject.String = String;
     String.$gtype = GObject.TYPE_STRING;
+
+    GObject.TYPE_JSOBJECT = GObject.type_from_name('JSObject');
+    GObject.JSObject = Object;
+    Object.$gtype = GObject.TYPE_JSOBJECT;
 
     GObject.TYPE_POINTER = GObject.type_from_name('gpointer');
     GObject.TYPE_BOXED = GObject.type_from_name('GBoxed');
@@ -350,6 +398,10 @@ function _init() {
 
     GObject.ParamSpec.object = function (name, nick, blurb, flags, objectType) {
         return GObject.param_spec_object(name, nick, blurb, objectType, flags);
+    };
+
+    GObject.ParamSpec.jsobject = function (name, nick, blurb, flags) {
+        return GObject.param_spec_boxed(name, nick, blurb, Object.$gtype, flags);
     };
 
     GObject.ParamSpec.param = function (name, nick, blurb, flags, paramType) {
@@ -438,7 +490,45 @@ function _init() {
 
     GObject.registerClass = registerClass;
 
+    GObject.Object.new = function (gtype, props = {}) {
+        const constructor = Gi.lookupConstructor(gtype);
+
+        if (!constructor)
+            throw new Error(`Constructor for gtype ${gtype} not found`);
+        return new constructor(props);
+    };
+
+    GObject.Object.new_with_properties = function (gtype, names, values) {
+        if (!Array.isArray(names) || !Array.isArray(values))
+            throw new Error('new_with_properties takes two arrays (names, values)');
+        if (names.length !== values.length)
+            throw new Error('Arrays passed to new_with_properties must be the same length');
+
+        const props = Object.fromEntries(names.map((name, ix) => [name, values[ix]]));
+        return GObject.Object.new(gtype, props);
+    };
+
     GObject.Object._classInit = function (klass) {
+        _checkProperties(klass);
+
+        if (_registerType in klass)
+            klass[_registerType]();
+        else
+            _resolveLegacyClassFunction(klass, _registerType).call(klass);
+
+        return klass;
+    };
+
+    // For backwards compatibility only. Use instanceof instead.
+    GObject.Object.implements = function (iface) {
+        if (iface.$gtype)
+            return GObject.type_is_a(this, iface.$gtype);
+        return false;
+    };
+
+    function registerGObjectType() {
+        let klass = this;
+
         let gtypename = _createGTypeName(klass);
         let gflags = klass.hasOwnProperty(GTypeFlags) ? klass[GTypeFlags] : 0;
         let gobjectInterfaces = klass.hasOwnProperty(interfaces) ? klass[interfaces] : [];
@@ -446,36 +536,39 @@ function _init() {
         let parent = Object.getPrototypeOf(klass);
         let gobjectSignals = klass.hasOwnProperty(signals) ? klass[signals] : [];
 
-        propertiesArray.forEach(pspec => _checkAccessors(klass.prototype, pspec, GObject));
+        // Default to the GObject-specific prototype, fallback on the JS prototype for GI native classes.
+        const parentPrototype = parent.prototype[Gi.gobject_prototype_symbol] ?? parent.prototype;
 
-        let newClass = Gi.register_type(parent.prototype, gtypename, gflags,
+        const [giPrototype, registeredType] = Gi.register_type_with_class(
+            klass, parentPrototype, gtypename, gflags,
             gobjectInterfaces, propertiesArray);
-        Object.setPrototypeOf(newClass, parent);
 
-        _createSignals(newClass.$gtype, gobjectSignals);
+        _defineGType(klass, giPrototype, registeredType);
+        _createSignals(klass.$gtype, gobjectSignals);
 
-        _copyAllDescriptors(newClass, klass);
-        gobjectInterfaces.forEach(iface =>
-            _copyAllDescriptors(newClass.prototype, iface.prototype,
-                ['toString']));
-        _copyAllDescriptors(newClass.prototype, klass.prototype);
+        // Reverse the interface array to give the last required interface precedence over the first.
+        const requiredInterfaces = [...gobjectInterfaces].reverse();
+        requiredInterfaces.forEach(iface =>
+            _copyInterfacePrototypeDescriptors(klass, iface));
+        requiredInterfaces.forEach(iface =>
+            _copyInterfacePrototypeDescriptors(klass.prototype, iface.prototype));
 
-        Object.getOwnPropertyNames(newClass.prototype)
+        Object.getOwnPropertyNames(klass.prototype)
         .filter(name => name.startsWith('vfunc_') || name.startsWith('on_'))
         .forEach(name => {
-            let descr = Object.getOwnPropertyDescriptor(newClass.prototype, name);
+            let descr = Object.getOwnPropertyDescriptor(klass.prototype, name);
             if (typeof descr.value !== 'function')
                 return;
 
-            let func = newClass.prototype[name];
+            let func = klass.prototype[name];
 
             if (name.startsWith('vfunc_')) {
-                newClass.prototype[Gi.hook_up_vfunc_symbol](name.slice(6), func);
+                giPrototype[Gi.hook_up_vfunc_symbol](name.slice(6), func);
             } else if (name.startsWith('on_')) {
                 let id = GObject.signal_lookup(name.slice(3).replace('_', '-'),
-                    newClass.$gtype);
+                    klass.$gtype);
                 if (id !== 0) {
-                    GObject.signal_override_class_closure(id, newClass.$gtype, function (...argArray) {
+                    GObject.signal_override_class_closure(id, klass.$gtype, function (...argArray) {
                         let emitter = argArray.shift();
 
                         return func.apply(emitter, argArray);
@@ -485,30 +578,61 @@ function _init() {
         });
 
         gobjectInterfaces.forEach(iface =>
-            _checkInterface(iface, newClass.prototype));
+            _checkInterface(iface, klass.prototype));
 
-        // For backwards compatibility only. Use instanceof instead.
-        newClass.implements = function (iface) {
-            if (iface.$gtype)
-                return GObject.type_is_a(newClass.$gtype, iface.$gtype);
-            return false;
-        };
+        // Lang.Class parent classes don't support static inheritance
+        if (!('implements' in klass))
+            klass.implements = GObject.Object.implements;
+    }
 
-        return newClass;
-    };
+    Object.defineProperty(GObject.Object, _registerType, {
+        value: registerGObjectType,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+    });
 
-    GObject.Interface._classInit = function (klass) {
+    function interfaceInstanceOf(instance) {
+        if (instance && typeof instance === 'object' &&
+            GObject.Interface.prototype.isPrototypeOf(this.prototype))
+            return GObject.type_is_a(instance, this);
+
+        return false;
+    }
+
+    function registerInterfaceType() {
+        let klass = this;
+
         let gtypename = _createGTypeName(klass);
         let gobjectInterfaces = klass.hasOwnProperty(requires) ? klass[requires] : [];
         let props = _propertiesAsArray(klass);
         let gobjectSignals = klass.hasOwnProperty(signals) ? klass[signals] : [];
 
-        let newInterface = Gi.register_interface(gtypename, gobjectInterfaces,
+        const [giPrototype, registeredType] = Gi.register_interface_with_class(klass, gtypename, gobjectInterfaces,
             props);
 
-        _createSignals(newInterface.$gtype, gobjectSignals);
+        _defineGType(klass, giPrototype, registeredType);
+        _createSignals(klass.$gtype, gobjectSignals);
 
-        _copyAllDescriptors(newInterface, klass);
+        Object.defineProperty(klass, Symbol.hasInstance, {
+            value: interfaceInstanceOf,
+        });
+
+        return klass;
+    }
+
+    Object.defineProperty(GObject.Interface, _registerType, {
+        value: registerInterfaceType,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+    });
+
+    GObject.Interface._classInit = function (klass) {
+        if (_registerType in klass)
+            klass[_registerType]();
+        else
+            _resolveLegacyClassFunction(klass, _registerType).call(klass);
 
         Object.getOwnPropertyNames(klass.prototype)
         .filter(key => key !== 'constructor')
@@ -521,15 +645,15 @@ function _init() {
             // SomeInterface.prototype.some_function.call(this, blah)
             if (typeof descr.value === 'function') {
                 let interfaceProto = klass.prototype;  // capture in closure
-                newInterface[key] = function (thisObj, ...args) {
+                klass[key] = function (thisObj, ...args) {
                     return interfaceProto[key].call(thisObj, ...args);
                 };
             }
 
-            Object.defineProperty(newInterface.prototype, key, descr);
+            Object.defineProperty(klass.prototype, key, descr);
         });
 
-        return newInterface;
+        return klass;
     };
 
     /**
@@ -562,6 +686,16 @@ function _init() {
     GObject.Object.prototype.set = function (params) {
         Object.assign(this, params);
     };
+
+    GObject.Object.prototype.bind_property_full = function (...args) {
+        return CjsPrivate.g_object_bind_property_full(this, ...args);
+    };
+
+    if (GObject.BindingGroup !== undefined) {
+        GObject.BindingGroup.prototype.bind_full = function (...args) {
+            return CjsPrivate.g_binding_group_bind_full(this, ...args);
+        };
+    }
 
     // fake enum for signal accumulators, keep in sync with gi/object.c
     GObject.AccumulatorType = {
@@ -609,10 +743,11 @@ function _init() {
      * The criteria are passed as properties of a match object.
      * The match object has to be non-empty for successful matches.
      * If no handler was found, a falsy value is returned.
+     *
      * @function
      * @param {GObject.Object} instance - the instance owning the signal handler
      *   to be found.
-     * @param {Object} match - a properties object indicating whether to match
+     * @param {object} match - a properties object indicating whether to match
      *   by signal ID, detail, or callback function.
      * @param {string} [match.signalId] - signal the handler has to be connected
      *   to.
@@ -620,7 +755,7 @@ function _init() {
      *   connected to.
      * @param {Function} [match.func] - the callback function the handler will
      *   invoke.
-     * @returns {number|BigInt|Object|null} A valid non-0 signal handler ID for
+     * @returns {number | bigint | object | null} A valid non-0 signal handler ID for
      *   a successful match.
      */
     GObject.signal_handler_find = function (instance, match) {
@@ -636,10 +771,11 @@ function _init() {
      * The match object has to have at least `func` for successful matches.
      * If no handlers were found, 0 is returned, the number of blocked handlers
      * otherwise.
+     *
      * @function
      * @param {GObject.Object} instance - the instance owning the signal handler
      *   to be found.
-     * @param {Object} match - a properties object indicating whether to match
+     * @param {object} match - a properties object indicating whether to match
      *   by signal ID, detail, or callback function.
      * @param {string} [match.signalId] - signal the handler has to be connected
      *   to.
@@ -665,10 +801,11 @@ function _init() {
      * handlers otherwise.
      * The match criteria should not apply to any handlers that are not
      * currently blocked.
+     *
      * @function
      * @param {GObject.Object} instance - the instance owning the signal handler
      *   to be found.
-     * @param {Object} match - a properties object indicating whether to match
+     * @param {object} match - a properties object indicating whether to match
      *   by signal ID, detail, or callback function.
      * @param {string} [match.signalId] - signal the handler has to be connected
      *   to.
@@ -692,10 +829,11 @@ function _init() {
      * The match object has to have at least `func` for successful matches.
      * If no handlers were found, 0 is returned, the number of disconnected
      * handlers otherwise.
+     *
      * @function
      * @param {GObject.Object} instance - the instance owning the signal handler
      *   to be found.
-     * @param {Object} match - a properties object indicating whether to match
+     * @param {object} match - a properties object indicating whether to match
      *   by signal ID, detail, or callback function.
      * @param {string} [match.signalId] - signal the handler has to be connected
      *   to.
@@ -717,6 +855,7 @@ function _init() {
 
     /**
      * Blocks all handlers on an instance that match `func`.
+     *
      * @function
      * @param {GObject.Object} instance - the instance to block handlers from.
      * @param {Function} func - the callback function the handler will invoke.
@@ -727,6 +866,7 @@ function _init() {
     };
     /**
      * Unblocks all handlers on an instance that match `func`.
+     *
      * @function
      * @param {GObject.Object} instance - the instance to unblock handlers from.
      * @param {Function} func - the callback function the handler will invoke.
@@ -737,6 +877,7 @@ function _init() {
     };
     /**
      * Disconnects all handlers on an instance that match `func`.
+     *
      * @function
      * @param {GObject.Object} instance - the instance to remove handlers from.
      * @param {Function} func - the callback function the handler will invoke.

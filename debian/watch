@@ -1,3 +1,2 @@
-version=3
-opts="filenamemangle=s/.*\/(.*)/cjs-$1/" \
-    https://github.com/linuxmint/cjs/tags .*/(\d.*)\.(?:tgz|tar\.(?:gz|bz2|xz))
+version=4
+https://github.com/linuxmint/cjs/tags (?:.*?/)?v?(\d[\d.]*)@ARCHIVE_EXT@

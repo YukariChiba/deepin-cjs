@@ -1,4 +1,6 @@
 # coding: utf8
+# SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+# SPDX-FileCopyrightText: 2020 Philip Chimento <philip.chimento@gmail.com>
 
 # IWYU is missing the feature to designate a certain header as a "forward-decls
 # header". In the case of SpiderMonkey, there are certain commonly used forward
@@ -38,13 +40,14 @@ FWD_DECLS_IN_HEADER = (
     'struct JSContext;',
     'struct JSClass;',
     'class JSFunction;',
-    'class JSFreeOp;',
     'class JSObject;',
     'struct JSRuntime;',
     'class JSScript;',
     'class JSString;',
-    'namespace js { class TempAllocPolicy; }'
-    'namespace JS { struct PropertyKey; }',
+    'struct JSPrincipals;',
+    'namespace js { class TempAllocPolicy; }',
+    'namespace JS { class GCContext; }',
+    'namespace JS { class PropertyKey; }',
     'namespace JS { class Symbol; }',
     'namespace JS { class BigInt; }',
     'namespace JS { class Value; }',
@@ -55,26 +58,60 @@ FWD_DECLS_IN_HEADER = (
 )
 add_fwd_header = False
 
+CSTDINT = '#include <cstdint>'
+STDINTH = '#include <stdint.h>'
+
 FALSE_POSITIVES = (
     # The bodies of these structs already come before their usage,
     # we don't need to have forward declarations of them as well
-    ('cjs/atoms.h', 'class GjsAtoms;', ''),
-    ('cjs/atoms.h', 'struct GjsSymbolAtom;', ''),
+    ('gjs/atoms.h', 'class GjsAtoms;', ''),
+    ('gjs/atoms.h', 'struct GjsSymbolAtom;', ''),
 
     # IWYU weird false positive when using std::vector::emplace_back() or
     # std::vector::push_back()
+    # https://github.com/include-what-you-use/include-what-you-use/issues/908
+    ('gi/function.cpp', '#include <algorithm>', 'for max'),
+    ('gi/function.cpp', '#include <algorithm>', 'for fill_n, max'),  # also!
     ('gi/private.cpp', '#include <algorithm>', 'for max'),
-    ('cjs/importer.cpp', '#include <algorithm>', 'for max'),
+    ('gjs/context.cpp', '#include <algorithm>', 'for copy, max, find'),
+    ('gjs/importer.cpp', '#include <algorithm>', 'for max'),
+    ('gjs/importer.cpp', '#include <algorithm>', 'for max, copy'),  # also!
     ('modules/cairo-context.cpp', '#include <algorithm>', 'for max'),
 
-    # Weird false positive on some versions of IWYU
-    ('gi/arg.cpp', 'struct _GHashTable;', ''),
-    ('gi/arg.cpp', 'struct _GVariant;', ''),
+    # False positive when using EnumType operators
+    # https://github.com/include-what-you-use/include-what-you-use/issues/927
+    ('modules/cairo-context.cpp', '#include <type_traits>', 'for enable_if_t'),
+    ('modules/cairo-region.cpp', '#include <type_traits>', 'for enable_if_t'),
+    ('modules/cairo-surface.cpp', '#include <type_traits>', 'for enable_if_t'),
+
+    # False positive when constructing JS::GCHashMap
+    ('gi/boxed.h', '#include <utility>', 'for move'),
+    ('gi/object.h', '#include <utility>', 'for move'),
+    ('gjs/jsapi-util-error.cpp', '#include <utility>', 'for move'),
+
+    # For some reason IWYU wants these with angle brackets when they are
+    # already present with quotes
+    # https://github.com/include-what-you-use/include-what-you-use/issues/1087
+    ('gjs/context.cpp', '#include <cjs/context.h>', ''),
+    ('gjs/coverage.cpp', '#include <cjs/coverage.h>', ''),
+    ('gjs/error-types.cpp', '#include <cjs/error-types.h>', ''),
+    ('gjs/jsapi-util.cpp', '#include <cjs/jsapi-util.h>', ''),
+    ('gjs/mem.cpp', '#include <cjs/mem.h>', ''),
+    ('gjs/profiler.cpp', '#include <cjs/profiler.h>', ''),
 )
 
 
 def output():
     global file, state, add_fwd_header, there_were_errors
+
+    # Workaround for
+    # https://github.com/include-what-you-use/include-what-you-use/issues/226
+    if CSTDINT in add:
+        why = add.pop(CSTDINT, None)
+        if STDINTH in remove:
+            remove.pop(STDINTH, None)
+        elif STDINTH not in all_includes:
+            add[STDINTH] = why
 
     if add_fwd_header:
         if FWD_HEADER not in all_includes:
@@ -95,8 +132,6 @@ def output():
             print(f'{Colors.RED}-{line}{Colors.NORMAL}{why}')
         there_were_errors = True
 
-    state = None
-    file = None
     add.clear()
     remove.clear()
     all_includes.clear()
@@ -106,6 +141,11 @@ def output():
 for line in sys.stdin:
     line = line.strip()
     if not line:
+        continue
+
+    if 'fatal error:' in line:
+        print(line)
+        there_were_errors = True
         continue
 
     # filter out errors having to do with compiler arguments unknown to IWYU

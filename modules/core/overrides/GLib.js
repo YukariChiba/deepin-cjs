@@ -1,24 +1,8 @@
-// Copyright 2011 Giovanni Campagna
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to
-// deal in the Software without restriction, including without limitation the
-// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-// sell copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-// IN THE SOFTWARE.
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2011 Giovanni Campagna
 
-const ByteArray = imports.byteArray;
+const ByteArray = imports._byteArrayNative;
+const {setMainLoopHook} = imports._promiseNative;
 
 let GLib;
 
@@ -65,13 +49,6 @@ function _readSingleType(signature, forceSimple) {
         throw new TypeError(`Invalid GVariant signature (${char} is not a valid type)`);
 
     return [char];
-}
-
-function _makeBytes(byteArray) {
-    if (byteArray instanceof Uint8Array || byteArray instanceof ByteArray.ByteArray)
-        return ByteArray.toGBytes(byteArray);
-    else
-        return new GLib.Bytes(byteArray);
 }
 
 function _packVariant(signature, value) {
@@ -123,15 +100,12 @@ function _packVariant(signature, value) {
         }
         if (arrayType[0] === 'y') {
             // special case for array of bytes
-            let bytes;
             if (typeof value === 'string') {
-                let byteArray = ByteArray.fromString(value);
-                if (byteArray[byteArray.length - 1] !== 0)
-                    byteArray = Uint8Array.of(...byteArray, 0);
-                bytes = ByteArray.toGBytes(byteArray);
-            } else {
-                bytes = _makeBytes(value);
+                value = ByteArray.fromString(value);
+                if (value[value.length - 1] !== 0)
+                    value = Uint8Array.of(...value, 0);
             }
+            const bytes = new GLib.Bytes(value);
             return GLib.Variant.new_from_bytes(new GLib.VariantType('ay'),
                 bytes, true);
         }
@@ -285,11 +259,39 @@ function _init() {
 
     GLib = this;
 
+    GLib.MainLoop.prototype.runAsync = function (...args) {
+        return new Promise((resolve, reject) => {
+            setMainLoopHook(() => {
+                try {
+                    resolve(this.run(...args));
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        });
+    };
+
+    // For convenience in property min or max values, since GLib.MAXINT64 and
+    // friends will log a warning when used
+    this.MAXINT64_BIGINT = 0x7fff_ffff_ffff_ffffn;
+    this.MININT64_BIGINT = -this.MAXINT64_BIGINT - 1n;
+    this.MAXUINT64_BIGINT = 0xffff_ffff_ffff_ffffn;
+
     // small HACK: we add a matches() method to standard Errors so that
     // you can do "if (e.matches(Ns.FooError, Ns.FooError.SOME_CODE))"
     // without checking instanceof
     Error.prototype.matches = function () {
         return false;
+    };
+
+    // Guard against domains that aren't valid quarks and would lead
+    // to a crash
+    const quarkToString = this.quark_to_string;
+    const realNewLiteral = this.Error.new_literal;
+    this.Error.new_literal = function (domain, code, message) {
+        if (quarkToString(domain) === null)
+            throw new TypeError(`Error.new_literal: ${domain} is not a valid domain`);
+        return realNewLiteral(domain, code, message);
     };
 
     this.Variant._new_internal = function (sig, value) {
@@ -325,15 +327,68 @@ function _init() {
     };
 
     this.Bytes.prototype.toArray = function () {
-        return imports.byteArray.fromGBytes(this);
+        return imports._byteArrayNative.fromGBytes(this);
     };
 
-    this.log_structured = function (logDomain, logLevel, stringFields) {
-        let fields = {};
-        for (let key in stringFields)
-            fields[key] = new GLib.Variant('s', stringFields[key]);
+    this.log_structured =
+    /**
+     * @param {string} logDomain Log domain.
+     * @param {GLib.LogLevelFlags} logLevel Log level, either from GLib.LogLevelFlags, or a user-defined level.
+     * @param {Record<string, unknown>} fields Key-value pairs of structured data to add to the log entry.
+     * @returns {void}
+     */
+    function log_structured(logDomain, logLevel, fields) {
+        /** @type {Record<string, GLib.Variant>} */
+        let variantFields = {};
 
-        GLib.log_variant(logDomain, logLevel, new GLib.Variant('a{sv}', fields));
+        for (let key in fields) {
+            const field = fields[key];
+
+            if (field instanceof Uint8Array) {
+                variantFields[key] = new GLib.Variant('ay', field);
+            } else if (typeof field === 'string') {
+                variantFields[key] = new GLib.Variant('s', field);
+            } else if (field instanceof GLib.Variant) {
+                // GLib.log_variant converts all Variants that are
+                // not 'ay' or 's' type to strings by printing
+                // them.
+                //
+                // https://gitlab.gnome.org/GNOME/glib/-/blob/a380bfdf93cb3bfd3cd4caedc0127c4e5717545b/glib/gmessages.c#L1894
+                variantFields[key] = field;
+            } else {
+                throw new TypeError(`Unsupported value ${field}, log_structured supports GLib.Variant, Uint8Array, and string values.`);
+            }
+        }
+
+        GLib.log_variant(logDomain, logLevel, new GLib.Variant('a{sv}', variantFields));
+    };
+
+    // CjsPrivate depends on GLib so we cannot import it
+    // before GLib is fully resolved.
+
+    this.log_set_writer_func_variant = function (...args) {
+        const {log_set_writer_func} = imports.gi.CjsPrivate;
+
+        log_set_writer_func(...args);
+    };
+
+    this.log_set_writer_default = function (...args) {
+        const {log_set_writer_default} = imports.gi.CjsPrivate;
+
+        log_set_writer_default(...args);
+    };
+
+    this.log_set_writer_func = function (writer_func) {
+        const {log_set_writer_func} = imports.gi.CjsPrivate;
+
+        if (typeof writer_func !== 'function') {
+            log_set_writer_func(writer_func);
+        } else {
+            log_set_writer_func(function (logLevel, stringFields) {
+                const stringFieldsObj = {...stringFields.recursiveUnpack()};
+                return writer_func(logLevel, stringFieldsObj);
+            });
+        }
     };
 
     this.VariantDict.prototype.lookup = function (key, variantType = null, deep = false) {
@@ -459,5 +514,28 @@ function _init() {
         const escapedValidArray = validArray.map(_escapeCharacterSetChars);
         const invalidRegex = new RegExp(`[^${escapedValidArray.join('')}]`, 'g');
         return string.replace(invalidRegex, substitutor);
+    };
+
+    // Prevent user code from calling GThread functions which always crash
+    this.Thread.new = function () {
+        throw _notIntrospectableError('GLib.Thread.new()',
+            'GIO asynchronous methods or Promise()');
+    };
+
+    this.Thread.try_new = function () {
+        throw _notIntrospectableError('GLib.Thread.try_new()',
+            'GIO asynchronous methods or Promise()');
+    };
+
+    this.Thread.exit = function () {
+        throw new Error('\'GLib.Thread.exit()\' may not be called in GJS');
+    };
+
+    this.Thread.prototype.ref = function () {
+        throw new Error('\'GLib.Thread.ref()\' may not be called in GJS');
+    };
+
+    this.Thread.prototype.unref = function () {
+        throw new Error('\'GLib.Thread.unref()\' may not be called in GJS');
     };
 }

@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008 litl, LLC
+
 const ByteArray = imports.byteArray;
-const {Gio, CjsPrivate, GLib} = imports.gi;
+const {Gio, GjsTestTools, GLib} = imports.gi;
 
 /* The methods list with their signatures.
  *
@@ -94,6 +97,7 @@ var TestIface = `<node>
 <property name="PropReadOnly" type="d" access="read" />
 <property name="PropWriteOnly" type="s" access="write" />
 <property name="PropReadWrite" type="v" access="readwrite" />
+<property name="PropPrePacked" type="a{sv}" access="read" />
 </interface>
 </node>`;
 
@@ -137,6 +141,10 @@ class Test {
 
     multipleInArgs(a, b, c, d, e) {
         return `${a} ${b} ${c} ${d} ${e}`;
+    }
+
+    emitPropertyChanged(name, value) {
+        this._impl.emit_property_changed(name, value);
     }
 
     emitSignal() {
@@ -215,6 +223,12 @@ class Test {
         this._propReadWrite = value.deepUnpack();
     }
 
+    get PropPrePacked() {
+        return new GLib.Variant('a{sv}', {
+            member: GLib.Variant.new_string('value'),
+        });
+    }
+
     structArray() {
         return [[128, 123456], [42, 654321]];
     }
@@ -237,14 +251,14 @@ class Test {
     }
 
     fdOut(bytes) {
-        const fd = CjsPrivate.open_bytes(bytes);
+        const fd = GjsTestTools.open_bytes(bytes);
         const fdList = Gio.UnixFDList.new_from_array([fd]);
         return [0, fdList];
     }
 
     fdOut2Async([bytes], invocation) {
         GLib.idle_add(GLib.PRIORITY_DEFAULT, function () {
-            const fd = CjsPrivate.open_bytes(bytes);
+            const fd = GjsTestTools.open_bytes(bytes);
             const fdList = Gio.UnixFDList.new_from_array([fd]);
             invocation.return_value_with_unix_fd_list(new GLib.Variant('(h)', [0]),
                 fdList);
@@ -323,6 +337,19 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can call a method with async/await', async function () {
+        const [{hello}] = await proxy.frobateStuffAsync({});
+        expect(hello.deepUnpack()).toEqual('world');
+    });
+
+    it('can initiate a proxy with promise and call a method with async/await', async function () {
+        const asyncProxy = await ProxyClass.newAsync(Gio.DBus.session,
+            'org.gnome.gjs.Test', '/org/gnome/gjs/Test');
+        expect(asyncProxy).toBeInstanceOf(Gio.DBusProxy);
+        const [{hello}] = await asyncProxy.frobateStuffAsync({});
+        expect(hello.deepUnpack()).toEqual('world');
+    });
+
     it('can call a remote method when not using makeProxyWrapper', function () {
         let info = Gio.DBusNodeInfo.new_for_xml(TestIface);
         let iface = info.interfaces[0];
@@ -351,7 +378,7 @@ describe('Exported DBus object', function () {
     /* excp must be exactly the exception thrown by the remote method
        (more or less) */
     it('can handle an exception thrown by a remote method', function () {
-        GLib.test_expect_message('Cjs', GLib.LogLevelFlags.LEVEL_WARNING,
+        GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
             'JS ERROR: Exception in method call: alwaysThrowException: *');
 
         proxy.alwaysThrowExceptionRemote({}, function (result, excp) {
@@ -361,8 +388,15 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can handle an exception thrown by a method with async/await', async function () {
+        GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
+            'JS ERROR: Exception in method call: alwaysThrowException: *');
+
+        await expectAsync(proxy.alwaysThrowExceptionAsync({})).toBeRejected();
+    });
+
     it('can still destructure the return value when an exception is thrown', function () {
-        GLib.test_expect_message('Cjs', GLib.LogLevelFlags.LEVEL_WARNING,
+        GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
             'JS ERROR: Exception in method call: alwaysThrowException: *');
 
         // This test will not fail, but instead if the functionality is not
@@ -391,6 +425,11 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('throws an exception when trying to call an async method that does not exist', async function () {
+        delete Test.prototype.thisDoesNotExist;
+        await expectAsync(proxy.thisDoesNotExistAsync()).toBeRejected();
+    });
+
     it('can pass a parameter to a remote method that is not a JSON object', function () {
         proxy.nonJsonFrobateStuffRemote(42, ([result], excp) => {
             expect(result).toEqual('42 it is!');
@@ -398,6 +437,11 @@ describe('Exported DBus object', function () {
             loop.quit();
         });
         loop.run();
+    });
+
+    it('can pass a parameter to a method with async/await that is not a JSON object', async function () {
+        const [result] = await proxy.nonJsonFrobateStuffAsync(1);
+        expect(result).toEqual('Oops');
     });
 
     it('can call a remote method with no in parameter', function () {
@@ -409,6 +453,11 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can call an async/await method with no in parameter', async function () {
+        const [result] = await proxy.noInParameterAsync();
+        expect(result).toEqual('Yes!');
+    });
+
     it('can call a remote method with multiple in parameters', function () {
         proxy.multipleInArgsRemote(1, 2, 3, 4, 5, ([result], excp) => {
             expect(result).toEqual('1 2 3 4 5');
@@ -418,6 +467,11 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can call an async/await method with multiple in parameters', async function () {
+        const [result] = await proxy.multipleInArgsAsync(1, 2, 3, 4, 5);
+        expect(result).toEqual('1 2 3 4 5');
+    });
+
     it('can call a remote method with no return value', function () {
         proxy.noReturnValueRemote(([result], excp) => {
             expect(result).not.toBeDefined();
@@ -425,6 +479,11 @@ describe('Exported DBus object', function () {
             loop.quit();
         });
         loop.run();
+    });
+
+    it('can call an async/await method with no return value', async function () {
+        const [result] = await proxy.noReturnValueAsync();
+        expect(result).not.toBeDefined();
     });
 
     it('can emit a DBus signal', function () {
@@ -443,6 +502,18 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can emit a DBus signal with async/await', async function () {
+        const handler = jasmine.createSpy('signalFoo');
+        const id = proxy.connectSignal('signalFoo', handler);
+        handler.and.callFake(() => proxy.disconnectSignal(id));
+
+        const [result] = await proxy.emitSignalAsync();
+        expect(result).not.toBeDefined();
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler).toHaveBeenCalledWith(jasmine.anything(),
+            jasmine.anything(), ['foobar']);
+    });
+
     it('can call a remote method with multiple return values', function () {
         proxy.multipleOutValuesRemote(function (result, excp) {
             expect(result).toEqual(['Hello', 'World', '!']);
@@ -452,6 +523,11 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can call an async/await method with multiple return values', async function () {
+        const results = await proxy.multipleOutValuesAsync();
+        expect(results).toEqual(['Hello', 'World', '!']);
+    });
+
     it('does not coalesce one array into the array of return values', function () {
         proxy.oneArrayOutRemote(([result], excp) => {
             expect(result).toEqual(['Hello', 'World', '!']);
@@ -459,6 +535,11 @@ describe('Exported DBus object', function () {
             loop.quit();
         });
         loop.run();
+    });
+
+    it('does not coalesce one array into the array of return values with async/await', async function () {
+        const [result] = await proxy.oneArrayOutAsync();
+        expect(result).toEqual(['Hello', 'World', '!']);
     });
 
     it('does not coalesce an array of arrays into the array of return values', function () {
@@ -471,6 +552,12 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('does not coalesce an array of arrays into the array of return values with async/await', async function () {
+        const [[a1, a2]] = await proxy.arrayOfArrayOutAsync();
+        expect(a1).toEqual(['Hello', 'World']);
+        expect(a2).toEqual(['World', 'Hello']);
+    });
+
     it('can return multiple arrays from a remote method', function () {
         proxy.multipleArrayOutRemote(([a1, a2], excp) => {
             expect(a1).toEqual(['Hello', 'World']);
@@ -481,12 +568,22 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can return multiple arrays from an async/await method', async function () {
+        const [a1, a2] = await proxy.multipleArrayOutAsync();
+        expect(a1).toEqual(['Hello', 'World']);
+        expect(a2).toEqual(['World', 'Hello']);
+    });
+
     it('handles a bad signature by throwing an exception', function () {
         proxy.arrayOutBadSigRemote(function (result, excp) {
             expect(excp).not.toBeNull();
             loop.quit();
         });
         loop.run();
+    });
+
+    it('handles a bad signature in async/await by rejecting the promise', async function () {
+        await expectAsync(proxy.arrayOutBadSigAsync()).toBeRejected();
     });
 
     it('can call a remote method that is implemented asynchronously', function () {
@@ -502,6 +599,14 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can call an async/await method that is implemented asynchronously', async function () {
+        const someString = 'Hello world!';
+        const someInt = 42;
+
+        const results = await proxy.echoAsync(someString, someInt);
+        expect(results).toEqual([someString, someInt]);
+    });
+
     it('can send and receive bytes from a remote method', function () {
         let someBytes = [0, 63, 234];
         someBytes.forEach(b => {
@@ -515,6 +620,14 @@ describe('Exported DBus object', function () {
         });
     });
 
+    it('can send and receive bytes from an async/await method', async function () {
+        let someBytes = [0, 63, 234];
+        await Promise.allSettled(someBytes.map(async b => {
+            const [byte] = await proxy.byteEchoAsync(b);
+            expect(byte).toEqual(b);
+        }));
+    });
+
     it('can call a remote method that returns an array of structs', function () {
         proxy.structArrayRemote(([result], excp) => {
             expect(excp).toBeNull();
@@ -522,6 +635,11 @@ describe('Exported DBus object', function () {
             loop.quit();
         });
         loop.run();
+    });
+
+    it('can call an async/await method that returns an array of structs', async function () {
+        const [result] = await proxy.structArrayAsync();
+        expect(result).toEqual([[128, 123456], [42, 654321]]);
     });
 
     it('can send and receive dicts from a remote method', function () {
@@ -551,9 +669,22 @@ describe('Exported DBus object', function () {
         loop.run();
     });
 
+    it('can send and receive dicts from an async/await method', async function () {
+        // See notes in test above
+        const [result] = await proxy.dictEchoAsync({
+            aDouble: new GLib.Variant('d', 10),
+            anInteger: new GLib.Variant('i', 10.5),
+            aDoubleBeforeAndAfter: new GLib.Variant('d', 10.5),
+        });
+        expect(result).not.toBeNull();
+        expect(result['anInteger'].deepUnpack()).toEqual(10);
+        expect(result['aDoubleBeforeAndAfter'].deepUnpack()).toEqual(10.5);
+        expect(result['aDouble'].deepUnpack()).toBe(10.0);
+    });
+
     it('can call a remote method with a Unix FD', function (done) {
         const expectedBytes = ByteArray.fromString('some bytes');
-        const fd = CjsPrivate.open_bytes(expectedBytes);
+        const fd = GjsTestTools.open_bytes(expectedBytes);
         const fdList = Gio.UnixFDList.new_from_array([fd]);
         proxy.fdInRemote(0, fdList, ([bytes], exc, outFdList) => {
             expect(exc).toBeNull();
@@ -563,9 +694,19 @@ describe('Exported DBus object', function () {
         });
     });
 
+    it('can call an async/await method with a Unix FD', async function () {
+        const encoder = new TextEncoder();
+        const expectedBytes = encoder.encode('some bytes');
+        const fd = GjsTestTools.open_bytes(expectedBytes);
+        const fdList = Gio.UnixFDList.new_from_array([fd]);
+        const [bytes, outFdList] = await proxy.fdInAsync(0, fdList);
+        expect(outFdList).not.toBeDefined();
+        expect(bytes).toEqual(expectedBytes);
+    });
+
     it('can call an asynchronously implemented remote method with a Unix FD', function (done) {
         const expectedBytes = ByteArray.fromString('some bytes');
-        const fd = CjsPrivate.open_bytes(expectedBytes);
+        const fd = GjsTestTools.open_bytes(expectedBytes);
         const fdList = Gio.UnixFDList.new_from_array([fd]);
         proxy.fdIn2Remote(0, fdList, ([bytes], exc, outFdList) => {
             expect(exc).toBeNull();
@@ -573,6 +714,16 @@ describe('Exported DBus object', function () {
             expect(bytes).toEqual(expectedBytes);
             done();
         });
+    });
+
+    it('can call an asynchronously implemented async/await method with a Unix FD', async function () {
+        const encoder = new TextEncoder();
+        const expectedBytes = encoder.encode('some bytes');
+        const fd = GjsTestTools.open_bytes(expectedBytes);
+        const fdList = Gio.UnixFDList.new_from_array([fd]);
+        const [bytes, outFdList] = await proxy.fdIn2Async(0, fdList);
+        expect(outFdList).not.toBeDefined();
+        expect(bytes).toEqual(expectedBytes);
     });
 
     function readBytesFromFdSync(fd) {
@@ -591,6 +742,14 @@ describe('Exported DBus object', function () {
         });
     });
 
+    it('can call an async/await method that returns a Unix FD', async function () {
+        const encoder = new TextEncoder();
+        const expectedBytes = encoder.encode('some bytes');
+        const [fdIndex, outFdList] = await proxy.fdOutAsync(expectedBytes);
+        const bytes = readBytesFromFdSync(outFdList.get(fdIndex));
+        expect(bytes).toEqual(expectedBytes);
+    });
+
     it('can call an asynchronously implemented remote method that returns a Unix FD', function (done) {
         const expectedBytes = ByteArray.fromString('some bytes');
         proxy.fdOut2Remote(expectedBytes, ([fdIndex], exc, outFdList) => {
@@ -601,8 +760,20 @@ describe('Exported DBus object', function () {
         });
     });
 
+    it('can call an asynchronously implemented asyc/await method that returns a Unix FD', async function () {
+        const encoder = new TextEncoder();
+        const expectedBytes = encoder.encode('some bytes');
+        const [fdIndex, outFdList] = await proxy.fdOut2Async(expectedBytes);
+        const bytes = readBytesFromFdSync(outFdList.get(fdIndex));
+        expect(bytes).toEqual(expectedBytes);
+    });
+
     it('throws an exception when not passing a Gio.UnixFDList to a method that requires one', function () {
         expect(() => proxy.fdInRemote(0, () => {})).toThrow();
+    });
+
+    it('rejects the promise when not passing a Gio.UnixFDList to an async method that requires one', async function () {
+        await expectAsync(proxy.fdInAsync(0)).toBeRejected();
     });
 
     it('throws an exception when passing a handle out of range of a Gio.UnixFDList', function () {
@@ -610,10 +781,16 @@ describe('Exported DBus object', function () {
         expect(() => proxy.fdInRemote(0, fdList, () => {})).toThrow();
     });
 
+    it('rejects the promise when async passing a handle out of range of a Gio.UnixFDList', async function () {
+        const fdList = new Gio.UnixFDList();
+        await expectAsync(proxy.fdInAsync(0, fdList)).toBeRejected();
+    });
+
     it('Has defined properties', function () {
         expect(proxy.hasOwnProperty('PropReadWrite')).toBeTruthy();
         expect(proxy.hasOwnProperty('PropReadOnly')).toBeTruthy();
         expect(proxy.hasOwnProperty('PropWriteOnly')).toBeTruthy();
+        expect(proxy.hasOwnProperty('PropPrePacked')).toBeTruthy();
     });
 
     it('reading readonly property works', function () {
@@ -657,5 +834,119 @@ describe('Exported DBus object', function () {
         }).toThrowError('Property PropReadOnly is not writable');
 
         expect(proxy.PropReadOnly).toBe(PROP_READ_ONLY_INITIAL_VALUE);
+    });
+
+    it('Reading a property that prepacks the return value works', function () {
+        expect(proxy.PropPrePacked.member).toBeInstanceOf(GLib.Variant);
+        expect(proxy.PropPrePacked.member.get_type_string()).toEqual('s');
+    });
+
+    it('Marking a property as invalidated works', function () {
+        let changedProps = {};
+        let invalidatedProps = [];
+
+        proxy.connect('g-properties-changed', (proxy_, changed, invalidated) => {
+            changedProps = changed.deepUnpack();
+            invalidatedProps = invalidated;
+            loop.quit();
+        });
+
+        test.emitPropertyChanged('PropReadOnly', null);
+        loop.run();
+
+        expect(changedProps).not.toContain('PropReadOnly');
+        expect(invalidatedProps).toContain('PropReadOnly');
+    });
+});
+
+
+describe('DBus Proxy wrapper', function () {
+    let loop;
+    let wasPromise;
+    let writerFunc;
+
+    beforeAll(function () {
+        loop = new GLib.MainLoop(null, false);
+
+        wasPromise = Gio.DBusProxy.prototype._original_init_async instanceof Function;
+        Gio._promisify(Gio.DBusProxy.prototype, 'init_async');
+
+        writerFunc = jasmine.createSpy(
+            'log writer func', (level, fields) => {
+                const decoder = new TextDecoder('utf-8');
+                const domain = decoder.decode(fields?.GLIB_DOMAIN);
+                const message = `${decoder.decode(fields?.MESSAGE)}\n`;
+                level |= GLib.LogLevelFlags.FLAG_RECURSION;
+                GLib.log_default_handler(domain, level, message, null);
+                return GLib.LogWriterOutput.HANDLED;
+            });
+
+        writerFunc.and.callThrough();
+        GLib.log_set_writer_func(writerFunc);
+    });
+
+    beforeEach(function () {
+        writerFunc.calls.reset();
+    });
+
+    it('init failures are reported in sync mode', function () {
+        const cancellable = new Gio.Cancellable();
+        cancellable.cancel();
+        expect(() => new ProxyClass(Gio.DBus.session, 'org.gnome.gjs.Test',
+            '/org/gnome/gjs/Test',
+            Gio.DBusProxyFlags.NONE,
+            cancellable)).toThrow();
+    });
+
+    it('init failures are reported in async mode', function () {
+        const cancellable = new Gio.Cancellable();
+        cancellable.cancel();
+        const initDoneSpy = jasmine.createSpy(
+            'init finish func', () => loop.quit());
+        initDoneSpy.and.callThrough();
+        new ProxyClass(Gio.DBus.session, 'org.gnome.gjs.Test',
+            '/org/gnome/gjs/Test',
+            initDoneSpy, cancellable, Gio.DBusProxyFlags.NONE);
+        loop.run();
+
+        expect(initDoneSpy).toHaveBeenCalledTimes(1);
+        const {args: callArgs} = initDoneSpy.calls.mostRecent();
+        expect(callArgs.at(0)).toBeNull();
+        expect(callArgs.at(1).matches(
+            Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)).toBeTrue();
+    });
+
+    it('can init a proxy asynchronously when promisified', function () {
+        new ProxyClass(Gio.DBus.session, 'org.gnome.gjs.Test',
+            '/org/gnome/gjs/Test',
+            () => loop.quit(),
+            Gio.DBusProxyFlags.NONE);
+        loop.run();
+
+        expect(writerFunc).not.toHaveBeenCalled();
+    });
+
+    it('can create a proxy from a promise', async function () {
+        const proxyPromise = ProxyClass.newAsync(Gio.DBus.session, 'org.gnome.gjs.Test',
+            '/org/gnome/gjs/Test');
+        await expectAsync(proxyPromise).toBeResolved();
+    });
+
+    it('can create fail a proxy from a promise', async function () {
+        const cancellable = new Gio.Cancellable();
+        cancellable.cancel();
+        const proxyPromise = ProxyClass.newAsync(Gio.DBus.session, 'org.gnome.gjs.Test',
+            '/org/gnome/gjs/Test', cancellable);
+        await expectAsync(proxyPromise).toBeRejected();
+    });
+
+    afterAll(function () {
+        if (!wasPromise) {
+            // Remove stuff added by Gio._promisify, this can be not needed in future
+            // nor should break other tests, but we didn't want to depend on those.
+            expect(Gio.DBusProxy.prototype._original_init_async).toBeInstanceOf(Function);
+            Gio.DBusProxy.prototype.init_async = Gio.DBusProxy.prototype._original_init_async;
+            delete Gio.DBusProxy.prototype._original_init_async;
+        }
     });
 });

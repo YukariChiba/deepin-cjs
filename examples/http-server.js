@@ -1,14 +1,21 @@
-// This is a simple example of a HTTP server in Gjs using libsoup
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2010 litl, LLC
 
-const Soup = imports.gi.Soup;
+// This is a simple example of a HTTP server in GJS using libsoup
+// open http://localhost:1080 in your browser or use http-client.js
 
-function handler(server, msg, path, query, client) {
-    msg.status_code = 200;
-    msg.response_headers.set_content_type('text/html', {});
-    msg.response_body.append(`
+import Soup from 'gi://Soup?version=3.0';
+import GLib from 'gi://GLib';
+
+const loop = GLib.MainLoop.new(null, false);
+
+function handler(_server, msg, _path, _query) {
+    msg.set_status(200, null);
+    msg.get_response_headers().set_content_type('text/html', {charset: 'UTF-8'});
+    msg.get_response_body().append(`
         <html>
         <body>
-            Greetings, visitor from ${client.get_host()}<br>
+            Greetings, visitor from ${msg.get_remote_host()}<br>
             What is your name?
             <form action="/hello">
                 <input name="myname">
@@ -18,15 +25,15 @@ function handler(server, msg, path, query, client) {
     `);
 }
 
-function helloHandler(server, msg, path, query) {
+function helloHandler(_server, msg, path, query) {
     if (!query) {
         msg.set_redirect(302, '/');
         return;
     }
 
-    msg.status_code = 200;
-    msg.response_headers.set_content_type('text/html', {charset: 'UTF-8'});
-    msg.response_body.append(`
+    msg.set_status(200, null);
+    msg.get_response_headers().set_content_type('text/html', {charset: 'UTF-8'});
+    msg.get_response_body().append(`
         <html>
         <body>
             Hello, ${query.myname}! ☺<br>
@@ -37,10 +44,12 @@ function helloHandler(server, msg, path, query) {
 }
 
 function main() {
-    let server = new Soup.Server({port: 1080});
+    let server = new Soup.Server();
     server.add_handler('/', handler);
     server.add_handler('/hello', helloHandler);
-    server.run();
+    server.listen_local(1080, Soup.ServerListenOptions.IPV4_ONLY);
 }
 
 main();
+
+loop.run();

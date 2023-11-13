@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008 litl, LLC
+
 describe('GI importer', function () {
     it('can import GI modules', function () {
         var GLib = imports.gi.GLib;
@@ -29,11 +32,21 @@ describe('GI importer', function () {
             expect(() => imports.gi.Regress).toThrow('💩');
         });
 
-        it("throws an exception when the overrides _init isn't a function", function () {
+        it('throws an exception when the overrides _init is a primitive', function () {
             expect(() => imports.gi.Gio).toThrowError(/_init/);
         });
     });
 });
+
+// Jasmine v3 often uses duck-typing (checking for a property to determine a type) to pretty print objects.
+// Unfortunately, checking for jasmineToString and other properties causes our importer objects to throw when resolving.
+// Luckily, we can override the default behavior with a custom formatter.
+function formatImporter(obj) {
+    if (typeof obj === 'object' && obj.toString && (obj.toString()?.startsWith('[object GjsModule') || obj.toString()?.startsWith('[GjsFileImporter ')))
+        return obj.toString();
+
+    return undefined;
+}
 
 describe('Importer', function () {
     let oldSearchPath;
@@ -51,6 +64,18 @@ describe('Importer', function () {
 
     afterAll(function () {
         imports.searchPath = oldSearchPath;
+    });
+
+    beforeEach(function () {
+        jasmine.addCustomObjectFormatter(formatImporter);
+    });
+
+    it('is on the global object (backwards compatibility)', function () {
+        expect(imports instanceof globalThis.GjsFileImporter).toBeTruthy();
+    });
+
+    it('is abstract', function () {
+        expect(() => new globalThis.GjsFileImporter()).toThrow();
     });
 
     it('exists', function () {
@@ -151,6 +176,14 @@ describe('Importer', function () {
         expect(subB.testImporterFunction()).toEqual('__init__ function tested');
     });
 
+    it('throws on an __init__.js file with a syntax error', function () {
+        expect(() => imports.subBadInit.SOMETHING).toThrowError(SyntaxError);
+    });
+
+    it('throws when an __init__.js throws an error', function () {
+        expect(() => imports.subErrorInit.SOMETHING).toThrowError('a bad init!');
+    });
+
     it('accesses a class defined in an __init__.js file', function () {
         let o = new subB.ImporterClass();
         expect(o).not.toBeNull();
@@ -172,10 +205,10 @@ describe('Importer', function () {
 
         it('will log a compatibility warning when accessed', function () {
             const GLib = imports.gi.GLib;
-            GLib.test_expect_message('Cjs', GLib.LogLevelFlags.LEVEL_WARNING,
+            GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
                 "Some code accessed the property 'b' on the module " +
                 "'lexicalScope'.*");
-            GLib.test_expect_message('Cjs', GLib.LogLevelFlags.LEVEL_WARNING,
+            GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
                 "Some code accessed the property 'c' on the module " +
                 "'lexicalScope'.*");
 
@@ -183,7 +216,7 @@ describe('Importer', function () {
             void LexicalScope.c;
 
             // g_test_assert_expected_messages() is a macro, not introspectable
-            GLib.test_assert_expected_messages_internal('Cjs',
+            GLib.test_assert_expected_messages_internal('Gjs',
                 'testImporter.js', 179, '');
         });
 
@@ -225,5 +258,18 @@ describe('Importer', function () {
     it("doesn't crash when resolving a non-string property", function () {
         expect(imports[0]).not.toBeDefined();
         expect(imports.foobar[0]).not.toBeDefined();
+    });
+
+    it('scripts support relative dynamic imports', async function () {
+        const {say} = await import('./modules/say.js');
+
+        expect(typeof say).toBe('function');
+        expect(say('hello')).toBe('<( hello )');
+    });
+
+    it('imported scripts support relative dynamic imports', async function () {
+        const response = await imports.dynamic.test();
+
+        expect(response).toBe('<( I did it! )');
     });
 });

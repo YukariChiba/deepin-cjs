@@ -1,8 +1,8 @@
-'use strict';
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2020 Andy Holmes <andrew.g.r.holmes@gmail.com>
 
-const GLib = imports.gi.GLib;
-const Gio = imports.gi.Gio;
-
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 
 /*
  * An XML DBus Interface
@@ -27,7 +27,6 @@ const ifaceXml = `
 
 // An example of the service-side implementation of the above interface.
 class Service {
-
     constructor() {
         this.dbus = Gio.DBusExportedObject.wrapJSObject(ifaceXml, this);
     }

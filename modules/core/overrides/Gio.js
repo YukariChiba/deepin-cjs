@@ -1,22 +1,5 @@
-// Copyright 2011 Giovanni Campagna
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to
-// deal in the Software without restriction, including without limitation the
-// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-// sell copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-// IN THE SOFTWARE.
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2011 Giovanni Campagna
 
 var GLib = imports.gi.GLib;
 var CjsPrivate = imports.gi.CjsPrivate;
@@ -202,8 +185,22 @@ function _addDBusConvenience() {
     let i, methods = info.methods;
     for (i = 0; i < methods.length; i++) {
         var method = methods[i];
-        this[`${method.name}Remote`] = _makeProxyMethod(methods[i], false);
+        let remoteMethod = _makeProxyMethod(methods[i], false);
+        this[`${method.name}Remote`] = remoteMethod;
         this[`${method.name}Sync`] = _makeProxyMethod(methods[i], true);
+        this[`${method.name}Async`] = function (...args) {
+            return new Promise((resolve, reject) => {
+                args.push((result, error, fdList) => {
+                    if (error)
+                        reject(error);
+                    else if (fdList)
+                        resolve([result, fdList]);
+                    else
+                        resolve(result);
+                });
+                remoteMethod.call(this, ...args);
+            });
+        };
     }
 
     let properties = info.properties;
@@ -236,7 +233,7 @@ function _addDBusConvenience() {
 function _makeProxyWrapper(interfaceXml) {
     var info = _newInterfaceInfo(interfaceXml);
     var iname = info.name;
-    return function (bus, name, object, asyncCallback, cancellable,
+    function wrapper(bus, name, object, asyncCallback, cancellable,
         flags = Gio.DBusProxyFlags.NONE) {
         var obj = new Gio.DBusProxy({
             g_connection: bus,
@@ -250,24 +247,29 @@ function _makeProxyWrapper(interfaceXml) {
         if (!cancellable)
             cancellable = null;
         if (asyncCallback) {
-            obj.init_async(GLib.PRIORITY_DEFAULT, cancellable, (initable, result) => {
-                let caughtErrorWhenInitting = null;
-                try {
-                    initable.init_finish(result);
-                } catch (e) {
-                    caughtErrorWhenInitting = e;
-                }
-
-                if (caughtErrorWhenInitting === null)
-                    asyncCallback(initable, null);
-                else
-                    asyncCallback(null, caughtErrorWhenInitting);
-            });
+            obj.init_async(GLib.PRIORITY_DEFAULT, cancellable).then(
+                () => asyncCallback(obj, null)).catch(e => asyncCallback(null, e));
         } else {
             obj.init(cancellable);
         }
         return obj;
+    }
+    wrapper.newAsync = function newAsync(bus, name, object, cancellable,
+        flags = Gio.DBusProxyFlags.NONE) {
+        const obj = new Gio.DBusProxy({
+            g_connection: bus,
+            g_interface_name: info.name,
+            g_interface_info: info,
+            g_name: name,
+            g_flags: flags,
+            g_object_path: object,
+        });
+
+        return new Promise((resolve, reject) =>
+            obj.init_async(GLib.PRIORITY_DEFAULT, cancellable ?? null).then(
+                () => resolve(obj)).catch(reject));
     };
+    return wrapper;
 }
 
 
@@ -381,7 +383,9 @@ function _handleMethodCall(info, impl, methodName, parameters, invocation) {
 function _handlePropertyGet(info, impl, propertyName) {
     let propInfo = info.lookup_property(propertyName);
     let jsval = this[propertyName];
-    if (jsval !== undefined)
+    if (jsval?.get_type_string?.() === propInfo.signature)
+        return jsval;
+    else if (jsval !== undefined)
         return new GLib.Variant(propInfo.signature, jsval);
     else
         return null;
@@ -420,16 +424,30 @@ function* _listModelIterator() {
         yield this.get_item(_index++);
 }
 
-function _promisify(proto, asyncFunc, finishFunc) {
-    if (proto[`_original_${asyncFunc}`] !== undefined)
+function _promisify(proto, asyncFunc, finishFunc = undefined) {
+    if (proto[asyncFunc] === undefined)
+        throw new Error(`${proto} has no method named ${asyncFunc}`);
+
+    if (finishFunc === undefined) {
+        if (asyncFunc.endsWith('_begin') || asyncFunc.endsWith('_async'))
+            finishFunc = `${asyncFunc.slice(0, -5)}finish`;
+        else
+            finishFunc = `${asyncFunc}_finish`;
+    }
+
+    if (proto[finishFunc] === undefined)
+        throw new Error(`${proto} has no method named ${finishFunc}`);
+
+    const originalFuncName = `_original_${asyncFunc}`;
+    if (proto[originalFuncName] !== undefined)
         return;
-    proto[`_original_${asyncFunc}`] = proto[asyncFunc];
+    proto[originalFuncName] = proto[asyncFunc];
     proto[asyncFunc] = function (...args) {
-        if (!args.every(arg => typeof arg !== 'function'))
-            return this[`_original_${asyncFunc}`](...args);
+        if (args.length === this[originalFuncName].length)
+            return this[originalFuncName](...args);
         return new Promise((resolve, reject) => {
-            const callStack = new Error().stack.split('\n').filter(line => !line.match(/promisify/)).join('\n');
-            this[`_original_${asyncFunc}`](...args, function (source, res) {
+            let {stack: callStack} = new Error();
+            this[originalFuncName](...args, function (source, res) {
                 try {
                     const result = source !== null && source[finishFunc] !== undefined
                         ? source[finishFunc](res)
@@ -438,6 +456,8 @@ function _promisify(proto, asyncFunc, finishFunc) {
                         result.shift();
                     resolve(result);
                 } catch (error) {
+                    callStack = callStack.split('\n').filter(line =>
+                        line.indexOf('_promisify/') === -1).join('\n');
                     if (error.stack)
                         error.stack += `### Promise created here: ###\n${callStack}`;
                     else
@@ -449,17 +469,20 @@ function _promisify(proto, asyncFunc, finishFunc) {
     };
 }
 
+function _notIntrospectableError(funcName, replacement) {
+    return new Error(`${funcName} is not introspectable. Use ${replacement} instead.`);
+}
+
+function _warnNotIntrospectable(funcName, replacement) {
+    logError(_notIntrospectableError(funcName, replacement));
+}
+
 function _init() {
     Gio = this;
 
-    Gio.DBus = {
-        get session() {
-            return Gio.bus_get_sync(Gio.BusType.SESSION, null);
-        },
-        get system() {
-            return Gio.bus_get_sync(Gio.BusType.SYSTEM, null);
-        },
+    Gio.Application.prototype.runAsync = GLib.MainLoop.prototype.runAsync;
 
+    Gio.DBus = {
         // Namespace some functions
         get: Gio.bus_get,
         get_finish: Gio.bus_get_finish,
@@ -473,6 +496,21 @@ function _init() {
         watch_name_on_connection: Gio.bus_watch_name_on_connection,
         unwatch_name: Gio.bus_unwatch_name,
     };
+
+    Object.defineProperties(Gio.DBus, {
+        'session': {
+            get() {
+                return Gio.bus_get_sync(Gio.BusType.SESSION, null);
+            },
+            enumerable: false,
+        },
+        'system': {
+            get() {
+                return Gio.bus_get_sync(Gio.BusType.SYSTEM, null);
+            },
+            enumerable: false,
+        },
+    });
 
     Gio.DBusConnection.prototype.watch_name = function (name, flags, appeared, vanished) {
         return Gio.bus_watch_name_on_connection(this, name, flags, appeared, vanished);
@@ -488,6 +526,7 @@ function _init() {
     };
 
     _injectToMethod(Gio.DBusProxy.prototype, 'init', _addDBusConvenience);
+    _promisify(Gio.DBusProxy.prototype, 'init_async');
     _injectToMethod(Gio.DBusProxy.prototype, 'init_async', _addDBusConvenience);
     _injectToStaticMethod(Gio.DBusProxy, 'new_sync', _addDBusConvenience);
     _injectToStaticMethod(Gio.DBusProxy, 'new_finish', _addDBusConvenience);
@@ -507,12 +546,170 @@ function _init() {
 
     // ListStore
     Gio.ListStore.prototype[Symbol.iterator] = _listModelIterator;
+    Gio.ListStore.prototype.insert_sorted = function (item, compareFunc) {
+        return CjsPrivate.list_store_insert_sorted(this, item, compareFunc);
+    };
+    Gio.ListStore.prototype.sort = function (compareFunc) {
+        return CjsPrivate.list_store_sort(this, compareFunc);
+    };
 
     // Promisify
     Gio._promisify = _promisify;
 
     // Temporary Gio.File.prototype fix
-    Gio._LocalFilePrototype = Gio.File.new_for_path('').constructor.prototype;
+    Gio._LocalFilePrototype = Gio.File.new_for_path('/').constructor.prototype;
+
+    Gio.File.prototype.replace_contents_async = function replace_contents_async(contents, etag, make_backup, flags, cancellable, callback) {
+        return this.replace_contents_bytes_async(contents, etag, make_backup, flags, cancellable, callback);
+    };
+
+    // Best-effort attempt to replace set_attribute(), which is not
+    // introspectable due to the pointer argument
+    Gio.File.prototype.set_attribute = function set_attribute(attribute, type, value, flags, cancellable) {
+        _warnNotIntrospectable('Gio.File.prototype.set_attribute', 'set_attribute_{type}');
+
+        switch (type) {
+        case Gio.FileAttributeType.STRING:
+            return this.set_attribute_string(attribute, value, flags, cancellable);
+        case Gio.FileAttributeType.BYTE_STRING:
+            return this.set_attribute_byte_string(attribute, value, flags, cancellable);
+        case Gio.FileAttributeType.UINT32:
+            return this.set_attribute_uint32(attribute, value, flags, cancellable);
+        case Gio.FileAttributeType.INT32:
+            return this.set_attribute_int32(attribute, value, flags, cancellable);
+        case Gio.FileAttributeType.UINT64:
+            return this.set_attribute_uint64(attribute, value, flags, cancellable);
+        case Gio.FileAttributeType.INT64:
+            return this.set_attribute_int64(attribute, value, flags, cancellable);
+        case Gio.FileAttributeType.INVALID:
+        case Gio.FileAttributeType.BOOLEAN:
+        case Gio.FileAttributeType.OBJECT:
+        case Gio.FileAttributeType.STRINGV:
+            throw _notIntrospectableError('This attribute type', 'Gio.FileInfo');
+        }
+    };
+
+    Gio.FileInfo.prototype.set_attribute = function set_attribute(attribute, type, value) {
+        _warnNotIntrospectable('Gio.FileInfo.prototype.set_attribute', 'set_attribute_{type}');
+
+        switch (type) {
+        case Gio.FileAttributeType.INVALID:
+            return this.remove_attribute(attribute);
+        case Gio.FileAttributeType.STRING:
+            return this.set_attribute_string(attribute, value);
+        case Gio.FileAttributeType.BYTE_STRING:
+            return this.set_attribute_byte_string(attribute, value);
+        case Gio.FileAttributeType.BOOLEAN:
+            return this.set_attribute_boolean(attribute, value);
+        case Gio.FileAttributeType.UINT32:
+            return this.set_attribute_uint32(attribute, value);
+        case Gio.FileAttributeType.INT32:
+            return this.set_attribute_int32(attribute, value);
+        case Gio.FileAttributeType.UINT64:
+            return this.set_attribute_uint64(attribute, value);
+        case Gio.FileAttributeType.INT64:
+            return this.set_attribute_int64(attribute, value);
+        case Gio.FileAttributeType.OBJECT:
+            return this.set_attribute_object(attribute, value);
+        case Gio.FileAttributeType.STRINGV:
+            return this.set_attribute_stringv(attribute, value);
+        }
+    };
+
+    Gio.InputStream.prototype.createSyncIterator = function* createSyncIterator(count) {
+        while (true) {
+            const bytes = this.read_bytes(count, null);
+            if (bytes.get_size() === 0)
+                return;
+            yield bytes;
+        }
+    };
+
+    Gio.InputStream.prototype.createAsyncIterator = async function* createAsyncIterator(
+        count, ioPriority = GLib.PRIORITY_DEFAULT) {
+        const self = this;
+
+        function next() {
+            return new Promise((resolve, reject) => {
+                self.read_bytes_async(count, ioPriority, null, (_self, res) => {
+                    try {
+                        const bytes = self.read_bytes_finish(res);
+                        resolve(bytes);
+                    } catch (err) {
+                        reject(err);
+                    }
+                });
+            });
+        }
+
+        while (true) {
+            // eslint-disable-next-line no-await-in-loop
+            const bytes = await next(count);
+            if (bytes.get_size() === 0)
+                return;
+            yield bytes;
+        }
+    };
+
+    Gio.FileEnumerator.prototype[Symbol.iterator] = function* FileEnumeratorIterator() {
+        while (true) {
+            try {
+                const info = this.next_file(null);
+                if (info === null)
+                    break;
+                yield info;
+            } catch (err) {
+                this.close(null);
+                throw err;
+            }
+        }
+        this.close(null);
+    };
+
+    Gio.FileEnumerator.prototype[Symbol.asyncIterator] = async function* AsyncFileEnumeratorIterator() {
+        const self = this;
+
+        function next() {
+            return new Promise((resolve, reject) => {
+                self.next_files_async(1, GLib.PRIORITY_DEFAULT, null, (_self, res) => {
+                    try {
+                        const files = self.next_files_finish(res);
+                        resolve(files.length === 0 ? null : files[0]);
+                    } catch (err) {
+                        reject(err);
+                    }
+                });
+            });
+        }
+
+        function close() {
+            return new Promise((resolve, reject) => {
+                self.close_async(GLib.PRIORITY_DEFAULT, null, (_self, res) => {
+                    try {
+                        resolve(self.close_finish(res));
+                    } catch (err) {
+                        reject(err);
+                    }
+                });
+            });
+        }
+
+        while (true) {
+            try {
+                // eslint-disable-next-line no-await-in-loop
+                const info = await next();
+                if (info === null)
+                    break;
+                yield info;
+            } catch (err) {
+                // eslint-disable-next-line no-await-in-loop
+                await close();
+                throw err;
+            }
+        }
+
+        return close();
+    };
 
     // Override Gio.Settings and Gio.SettingsSchema - the C API asserts if
     // trying to access a nonexistent schema or key, which is not handy for
@@ -621,4 +818,28 @@ function _init() {
 
         get_child: createCheckedMethod('get_child', '_checkChild'),
     });
+
+    // ActionMap
+    // add_action_entries is not introspectable
+    // https://gitlab.gnome.org/GNOME/gjs/-/issues/407
+    Gio.ActionMap.prototype.add_action_entries = function add_action_entries(entries) {
+        for (const {name, activate, parameter_type, state, change_state} of entries) {
+            if (typeof parameter_type === 'string' && !GLib.variant_type_string_is_valid(parameter_type))
+                throw new Error(`parameter_type "${parameter_type}" is not a valid VariantType`);
+
+            const action = new Gio.SimpleAction({
+                name,
+                parameter_type: typeof parameter_type === 'string' ? new GLib.VariantType(parameter_type) : null,
+                state: typeof state === 'string' ? GLib.Variant.parse(null, state, null, null) : null,
+            });
+
+            if (typeof activate === 'function')
+                action.connect('activate', activate.bind(action));
+
+            if (typeof change_state === 'function')
+                action.connect('change-state', change_state.bind(action));
+
+            this.add_action(action);
+        }
+    };
 }

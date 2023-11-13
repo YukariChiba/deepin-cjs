@@ -1,25 +1,6 @@
 /* -*- mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
-/*
- * Copyright (c) 2008  litl, LLC
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to
- * deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
- */
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008 litl, LLC
 
 #include <config.h>
 
@@ -29,6 +10,7 @@
 #include <js/Class.h>
 #include <js/RootingAPI.h>
 #include <js/TypeDecls.h>
+#include <js/Utility.h>  // for UniqueChars
 #include <js/Warnings.h>
 
 #include "gi/arg-inl.h"
@@ -36,6 +18,7 @@
 #include "gi/repo.h"
 #include "gi/union.h"
 #include "cjs/jsapi-util.h"
+#include "cjs/macros.h"
 #include "cjs/mem-private.h"
 #include "util/log.h"
 
@@ -46,8 +29,8 @@ UnionPrototype::UnionPrototype(GIUnionInfo* info, GType gtype)
 
 UnionPrototype::~UnionPrototype(void) { GJS_DEC_COUNTER(union_prototype); }
 
-UnionInstance::UnionInstance(JSContext* cx, JS::HandleObject obj)
-    : GIWrapperInstance(cx, obj) {
+UnionInstance::UnionInstance(UnionPrototype* prototype, JS::HandleObject obj)
+    : GIWrapperInstance(prototype, obj) {
     GJS_INC_COUNTER(union_instance);
 }
 
@@ -165,16 +148,14 @@ const struct JSClassOps UnionBase::class_ops = {
 
 const struct JSClass UnionBase::klass = {
     "GObject_Union",
-    JSCLASS_HAS_PRIVATE | JSCLASS_FOREGROUND_FINALIZE,
+    JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLASS_FOREGROUND_FINALIZE,
     &UnionBase::class_ops
 };
 // clang-format on
 
-bool
-gjs_define_union_class(JSContext       *context,
-                       JS::HandleObject in_object,
-                       GIUnionInfo     *info)
-{
+bool UnionPrototype::define_class(JSContext* context,
+                                  JS::HandleObject in_object,
+                                  GIUnionInfo* info) {
     GType gtype;
     JS::RootedObject prototype(context), constructor(context);
 
@@ -191,11 +172,8 @@ gjs_define_union_class(JSContext       *context,
                                           &constructor, &prototype);
 }
 
-JSObject*
-gjs_union_from_c_union(JSContext    *context,
-                       GIUnionInfo  *info,
-                       void         *gboxed)
-{
+JSObject* UnionInstance::new_for_c_union(JSContext* context, GIUnionInfo* info,
+                                         void* gboxed) {
     GType gtype;
 
     if (!gboxed)

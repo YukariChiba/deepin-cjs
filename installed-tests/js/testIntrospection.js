@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2008, 2018 Red Hat, Inc.
+// SPDX-FileCopyrightText: 2017 Philip Chimento <philip.chimento@gmail.com>
+// SPDX-FileCopyrightText: 2020 Ole Jørgen Brønner <olejorgenb@yahoo.no>
+
 // Various tests having to do with how introspection is implemented in GJS
 
 imports.gi.versions.Gdk = '3.0';
@@ -7,6 +12,8 @@ const System = imports.system;
 
 describe('GLib.DestroyNotify parameter', function () {
     it('throws when encountering a GDestroyNotify not associated with a callback', function () {
+        // should throw when called, not when the function object is created
+        expect(() => Gio.MemoryInputStream.new_from_data).not.toThrow();
         // the 'destroy' argument applies to the data, which is not supported in
         // gobject-introspection
         expect(() => Gio.MemoryInputStream.new_from_data('foobar'))
@@ -16,16 +23,16 @@ describe('GLib.DestroyNotify parameter', function () {
 
 describe('Unsafe integer marshalling', function () {
     it('warns when conversion is lossy', function () {
-        GLib.test_expect_message('Cjs', GLib.LogLevelFlags.LEVEL_WARNING,
+        GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
             '*cannot be safely stored*');
-        GLib.test_expect_message('Cjs', GLib.LogLevelFlags.LEVEL_WARNING,
+        GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
             '*cannot be safely stored*');
-        GLib.test_expect_message('Cjs', GLib.LogLevelFlags.LEVEL_WARNING,
+        GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
             '*cannot be safely stored*');
         void GLib.MININT64;
         void GLib.MAXINT64;
         void GLib.MAXUINT64;
-        GLib.test_assert_expected_messages_internal('Cjs',
+        GLib.test_assert_expected_messages_internal('Gjs',
             'testEverythingBasic.js', 0,
             'Limits warns when conversion is lossy');
     });
@@ -33,15 +40,19 @@ describe('Unsafe integer marshalling', function () {
 
 describe('Marshalling empty flat arrays of structs', function () {
     let widget;
+    let gtkEnabled;
     beforeAll(function () {
-        if (GLib.getenv('ENABLE_GTK') !== 'yes') {
-            pending('GTK disabled');
+        gtkEnabled = GLib.getenv('ENABLE_GTK') === 'yes';
+        if (!gtkEnabled)
             return;
-        }
         Gtk.init(null);
     });
 
     beforeEach(function () {
+        if (!gtkEnabled) {
+            pending('GTK disabled');
+            return;
+        }
         widget = new Gtk.Label();
     });
 
@@ -79,15 +90,19 @@ describe('GError domains', function () {
 
 describe('Object properties on GtkBuilder-constructed objects', function () {
     let o1;
+    let gtkEnabled;
     beforeAll(function () {
-        if (GLib.getenv('ENABLE_GTK') !== 'yes') {
-            pending('GTK disabled');
+        gtkEnabled = GLib.getenv('ENABLE_GTK') === 'yes';
+        if (!gtkEnabled)
             return;
-        }
         Gtk.init(null);
     });
 
     beforeEach(function () {
+        if (!gtkEnabled) {
+            pending('GTK disabled');
+            return;
+        }
         const ui = `
             <interface>
               <object class="GtkButton" id="button">
@@ -125,6 +140,41 @@ describe('Garbage collection of introspected objects', function () {
         System.gc();
         GLib.idle_add(GLib.PRIORITY_LOW, () => done());
     });
+
+    // This tests a race condition that would crash; it should warn instead
+    it('handles setting a property from C on an object whose JS wrapper has been collected', function (done) {
+        class SomeObject extends GObject.Object {
+            static [GObject.properties] = {
+                'screenfull': GObject.ParamSpec.boolean('screenfull', '', '',
+                    GObject.ParamFlags.READWRITE,
+                    false),
+            };
+
+            static {
+                GObject.registerClass(this);
+            }
+        }
+
+        GLib.test_expect_message('Gjs', GLib.LogLevelFlags.LEVEL_WARNING,
+            '*property screenfull*');
+
+        const settings = new Gio.Settings({schema: 'org.gnome.GjsTest'});
+        let obj = new SomeObject();
+        settings.bind('fullscreen', obj, 'screenfull', Gio.SettingsBindFlags.DEFAULT);
+        const handler = settings.connect('changed::fullscreen', () => {
+            obj.run_dispose();
+            obj = null;
+            settings.disconnect(handler);
+            GLib.idle_add(GLib.PRIORITY_LOW, () => {
+                GLib.test_assert_expected_messages_internal('Gjs',
+                    'testIntrospection.js', 0,
+                    'Warn about setting property on disposed JS object');
+                done();
+            });
+        });
+        settings.set_boolean('fullscreen', !settings.get_boolean('fullscreen'));
+        settings.reset('fullscreen');
+    });
 });
 
 describe('Gdk.Atom', function () {
@@ -150,5 +200,13 @@ describe('Complete enumeration of GIRepositoryNamespace (new_enumerate)', functi
         // Note: properties which has been accessed are listed without new_enumerate hook
         const expectAtLeast = ['KEY_ybelowdot', 'EventSequence', 'ByteOrder', 'Window'];
         expect(names).toEqual(jasmine.arrayContaining(expectAtLeast));
+    });
+
+    it('all enumerated properties are defined', function () {
+        const names = Object.keys(Gdk);
+        expect(() => {
+            // Access each enumerated property to check it can be defined.
+            names.forEach(name => Gdk[name]);
+        }).not.toThrowError(/API of type .* not implemented, cannot define .*/);
     });
 });

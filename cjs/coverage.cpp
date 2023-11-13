@@ -1,27 +1,7 @@
 /* -*- mode: C++; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
-/*
- * Copyright © 2014 Endless Mobile, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to
- * deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
- *
- * Authored By: Sam Spilsbury <sam@endlessm.com>
- */
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+// SPDX-FileCopyrightText: 2014 Endless Mobile, Inc.
+// SPDX-FileContributor: Authored By: Sam Spilsbury <sam@endlessm.com>
 
 #include <config.h>
 
@@ -34,13 +14,15 @@
 #include <glib-object.h>
 
 #include <js/GCAPI.h>  // for JS_AddExtraGCRootsTracer, JS_Remove...
+#include <js/PropertyAndElement.h>
+#include <js/Realm.h>
 #include <js/RootingAPI.h>
 #include <js/TracingAPI.h>
 #include <js/TypeDecls.h>
+#include <js/Utility.h>  // for UniqueChars
 #include <js/Value.h>
 #include <js/experimental/CodeCoverage.h>  // for EnableCodeCoverage
-#include <jsapi.h>        // for JSAutoRealm, JS_SetPropertyById
-#include <jsfriendapi.h>  // for GetCodeCoverageSummary
+#include <jsapi.h>                         // for JS_WrapObject
 
 #include "cjs/atoms.h"
 #include "cjs/context-private.h"
@@ -69,7 +51,7 @@ G_DEFINE_TYPE_WITH_PRIVATE(GjsCoverage,
                            G_TYPE_OBJECT)
 
 enum {
-    PROP_0,
+    PROP_COVERAGE_0,
     PROP_PREFIXES,
     PROP_CONTEXT,
     PROP_CACHE,
@@ -147,32 +129,25 @@ static GParamSpec *properties[PROP_N] = { NULL, };
  */
 [[nodiscard]] static char* find_diverging_child_components(GFile* child,
                                                            GFile* parent) {
-    g_object_ref(parent);
-    GFile *ancestor = parent;
-    while (ancestor != NULL) {
+    GjsAutoUnref<GFile> ancestor(parent, GjsAutoTakeOwnership());
+    while (ancestor) {
         char *relpath = g_file_get_relative_path(ancestor, child);
-        if (relpath) {
-            g_object_unref(ancestor);
+        if (relpath)
             return relpath;
-        }
-        GFile *new_ancestor = g_file_get_parent(ancestor);
-        g_object_unref(ancestor);
-        ancestor = new_ancestor;
+
+        ancestor = g_file_get_parent(ancestor);
     }
 
     /* This is a special case of getting the URI below. The difference is that
      * this gives you a regular path name; getting it through the URI would
      * give a URI-encoded path (%20 for spaces, etc.) */
-    GFile *root = g_file_new_for_path("/");
-    char *child_path = g_file_get_relative_path(root, child);
-    g_object_unref(root);
+    GjsAutoUnref<GFile> root = g_file_new_for_path("/");
+    char* child_path = g_file_get_relative_path(root, child);
     if (child_path)
         return child_path;
 
-    char *child_uri = g_file_get_uri(child);
-    char *stripped_uri = strip_uri_scheme(child_uri);
-    g_free(child_uri);
-    return stripped_uri;
+    GjsAutoChar child_uri = g_file_get_uri(child);
+    return strip_uri_scheme(child_uri);
 }
 
 [[nodiscard]] static bool filename_has_coverage_prefixes(GjsCoverage* self,

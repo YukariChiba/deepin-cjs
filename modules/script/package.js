@@ -1,22 +1,5 @@
-// Copyright 2012 Giovanni Campagna
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to
-// deal in the Software without restriction, including without limitation the
-// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-// sell copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-// IN THE SOFTWARE.
+// SPDX-FileCopyrightText: 2012 Giovanni Campagna
+// SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
 
 /* exported checkSymbol, datadir, init, initFormat, initGettext, initSubmodule,
 libdir, localedir, moduledir, name, pkgdatadir, pkglibdir, prefix, require,
@@ -132,20 +115,7 @@ function init(params) {
     datadir = GLib.build_filenamev([prefix, 'share']);
     let libpath, girpath;
 
-    if (_runningFromSource()) {
-        log('Running from source tree, using local files');
-        // Running from source directory
-        _base = GLib.get_current_dir();
-        _submoduledir = _base;
-        pkglibdir = GLib.build_filenamev([_base, 'lib']);
-        libpath = GLib.build_filenamev([pkglibdir, '.libs']);
-        girpath = pkglibdir;
-        pkgdatadir = GLib.build_filenamev([_base, 'data']);
-        localedir = GLib.build_filenamev([_base, 'po']);
-        moduledir = GLib.build_filenamev([_base, 'src']);
-
-        GLib.setenv('GSETTINGS_SCHEMA_DIR', pkgdatadir, true);
-    } else if (_runningFromMesonSource()) {
+    if (_runningFromMesonSource()) {
         log('Running from Meson, using local files');
         let bld = GLib.getenv('MESON_BUILD_ROOT');
         let src = GLib.getenv('MESON_SOURCE_ROOT');
@@ -164,6 +134,19 @@ function init(params) {
         } catch (e) {
             moduledir = GLib.build_filenamev([src, 'src']);
         }
+    } else if (_runningFromSource()) {
+        log('Running from source tree, using local files');
+        // Running from source directory
+        _base = GLib.get_current_dir();
+        _submoduledir = _base;
+        pkglibdir = GLib.build_filenamev([_base, 'lib']);
+        libpath = GLib.build_filenamev([pkglibdir, '.libs']);
+        girpath = pkglibdir;
+        pkgdatadir = GLib.build_filenamev([_base, 'data']);
+        localedir = GLib.build_filenamev([_base, 'po']);
+        moduledir = GLib.build_filenamev([_base, 'src']);
+
+        GLib.setenv('GSETTINGS_SCHEMA_DIR', pkgdatadir, true);
     } else {
         _base = prefix;
         pkglibdir = GLib.build_filenamev([libdir, _pkgname]);
@@ -199,6 +182,7 @@ function init(params) {
  * single entry point.
  * You must define a main(ARGV) function inside a main.js
  * module in moduledir.
+ *
  * @param {object} params see init()
  */
 function start(params) {
@@ -228,6 +212,7 @@ function run(module) {
  * `libs` must be an object whose keys are a typelib name,
  * and values are the respective version. The empty string
  * indicates any version.
+ *
  * @param {object} libs the external dependencies to import
  */
 function require(libs) {
@@ -238,6 +223,7 @@ function require(libs) {
 /**
  * As checkSymbol(), but exit with an error if the
  * dependency cannot be satisfied.
+ *
  * @param {string} lib an external dependency to import
  * @param {string} [ver] version of the dependency
  * @param {string} [symbol] symbol to check for
@@ -265,7 +251,7 @@ function requireSymbol(lib, ver, symbol) {
  * @param {string} lib an external dependency to import
  * @param {string} [ver] version of the dependency
  * @param {string} [symbol] symbol to check for
- * @return {boolean} true if `lib` can be imported and provides `symbol`, false
+ * @returns {boolean} true if `lib` can be imported and provides `symbol`, false
  * otherwise
  */
 function checkSymbol(lib, ver, symbol) {
@@ -284,7 +270,7 @@ function checkSymbol(lib, ver, symbol) {
         return true; // Done
 
     let [klass, sym] = symbol.split('.');
-    if (klass === symbol) // global symbol
+    if (klass === symbol)
         return typeof Lib[symbol] !== 'undefined';
 
     let obj = Lib[klass];
@@ -320,6 +306,7 @@ function initGettext() {
 }
 
 function initFormat() {
+    // eslint-disable-next-line no-restricted-properties
     let format = imports.format;
     String.prototype.format = format.format;
 }

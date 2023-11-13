@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT OR LGPL-2.0-or-later
+# SPDX-FileCopyrightText: 2017 Philip Chimento <philip.chimento@gmail.com>
 
 if test "$GJS_USE_UNINSTALLED_FILES" = "1"; then
     gjs="$TOP_BUILDDIR/cjs-console"
@@ -27,7 +29,7 @@ $gjs -c 'imports.gi.GLib.get_home_dir("foobar")' 2>&1 | \
 report "passing too many arguments to a GI function should warn"
 
 $gjs -c '**' 2>&1 | \
-    grep -q 'SyntaxError.*@ <command line>:1'
+    grep -q 'SyntaxError.*@ <command line>:1:0'
 report "file and line number are logged for syntax errors"
 
 echo "1..$total"
